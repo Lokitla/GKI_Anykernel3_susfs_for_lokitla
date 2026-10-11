@@ -19,11 +19,12 @@ on:
         required: false
         type: string
         default: "auto"
-      # 由上游入口的合并输入框「管理器提交 hash」传入。该框内容为
-      # 「SukiSU/管理器 hash[,SUSFS hash]」，本工作流只用逗号前那一段
-      # （管理器 hash），拆分在下面的「获取 KSU & SUSFS 版本」步骤完成。
+      # 由上游入口的合并输入框「提交 hash」传入。该框内容为
+      # 「<管理器&内核KSU>,<SUSFS>」（逗号或竖线分隔，0 = 该段不指定），
+      # 本工作流只用第 1 段（管理器 hash），拆分在下面完成，
+      # 且与 build.yml 的解析规则保持一致（0 与竖线同样识别）。
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash；可选逗号后的第二段为 SUSFS hash，此处忽略）"
+        description: "提交 hash（合并输入框，本工作流只用第 1 段）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定"
         required: false
         type: string
         default: ""
@@ -155,8 +156,17 @@ jobs:
           if [ -z "$SUKISU_COMMIT" ] && [ "$CUSTOM_ENABLED" = "true" ]; then
             SUKISU_COMMIT="$CUSTOM_COMMIT"
           fi
-          # 合并输入框：只取逗号前第一段（管理器 hash），第二段是 SUSFS hash，与管理器无关。
-          SUKISU_COMMIT=$(echo "$SUKISU_COMMIT" | cut -d',' -f1 | xargs)
+          # 合并输入框：只取第 1 段（管理器&内核KSU），第 2 段是 SUSFS hash，与管理器无关。
+          # 与 build.yml 的解析规则保持一致：逗号或竖线分隔，0 = 该段不指定。
+          # 不这么做的话，填 0,def456... 时这里会拿到字面的 "0"，
+          # 进而执行 git fetch origin 0 并把 head_sha=0 带进版本查询。
+          case "$SUKISU_COMMIT" in
+            *"|"*) _sep='|' ;;
+            *)     _sep=',' ;;
+          esac
+          SUKISU_COMMIT="${SUKISU_COMMIT%%$_sep*}"
+          SUKISU_COMMIT=$(printf '%s' "$SUKISU_COMMIT" | tr -d '[:space:]' | tr -d '"' | tr -d "'")
+          if [ "$SUKISU_COMMIT" = "0" ]; then SUKISU_COMMIT=""; fi
 
           # 管理器 APK 只能来自 main 分支：builtin 是只含 kernel/ 与 uapi/ 的独立分支，
           # 连 manager/ 目录都没有，不存在可用的 Manager CI 产物。
