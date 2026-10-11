@@ -3,7 +3,7 @@
 Build the kernel on your own machine, without GitHub Actions.
 
 **Local and CI share the same build logic** — `build.py` only parses arguments; every real step
-lives in [`scripts/build_kernel.sh`](../scripts/build_kernel.sh) (47 phases). Both behave
+lives in [`scripts/build_kernel.sh`](../scripts/build_kernel.sh) (48 phases). Both behave
 identically, so there is no second implementation to keep in sync.
 
 > Change build behaviour in `scripts/build_kernel.sh`, never by rewriting shell inside
@@ -28,7 +28,7 @@ identically, so there is no second implementation to keep in sync.
 # List supported version combos (data comes from data/)
 python3 build.py --list-configs
 
-# List all 47 build phases
+# List all 48 build phases
 python3 build.py --list-phases
 
 # Build a single version
@@ -105,7 +105,7 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 ## Resuming and single-step debugging
 
-The build is split into 47 phases; `--list-phases` prints the full numbered list. A kernel build
+The build is split into 48 phases; `--list-phases` prints the full numbered list. A kernel build
 takes tens of minutes, so rerunning everything is expensive — use these two flags to rerun only
 what broke:
 
@@ -126,7 +126,9 @@ Common phase names: `sync_kernel_source`, `add_kernelsu`, `apply_susfs`, `config
 
 - **"Clean disk space" runs only on GitHub Actions runners**; local builds skip it so nothing on
   your machine is deleted by accident.
-- `--kpm` skips image patching on 6.6 kernels (unsupported there).
+- `--kpm` is force-disabled by the script on kernels ≥ 6.10 (`KPM_SUPPORTED=0`: the KPM
+  code uses `netlink_kernel_cfg.cb_mutex`, removed in newer kernels). **6.6 and below ARE
+  supported** — earlier docs had this boundary backwards.
 - Defaults match Actions: ZRAM is **on**, every other optional feature is off.
 
 ---
