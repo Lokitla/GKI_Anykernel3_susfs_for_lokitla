@@ -146,7 +146,12 @@ on:
         type: boolean
         default: false
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash；可选用英文逗号后接 SUSFS hash，留空则不锁定）"
+        description: "管理器提交 hash（SukiSU/管理器 hash；可选用英文逗号后接 SUSFS hash，留空则不锁定）。注意：它只决定选用哪个管理器 APK，不直接控制内核源码——内核跟随所选 APK 对应的构建提交，且落后超过 5 个提交时会放弃对齐。要精确钉住内核版本请用下面的「内核 KSU 对齐提交」"
+        required: false
+        type: string
+        default: ""
+      ksu_commit:
+        description: "内核 KSU 对齐提交：内核侧 KernelSU 直接检出到该提交（留空=沿用自动对齐/跟随上游 main HEAD）。上游临时故障时的止损手段，例如 BakaSU 挂起 SUSFS 期间可填 5b76b884c75f729a220bb317aa4a4fc78f0e0e9c"
         required: false
         type: string
         default: ""
@@ -339,8 +344,10 @@ jobs:
       revision: "r1"
       ksu_variant: ${{ inputs.kernelsu_variant }}
       # 内核侧 KernelSU 检出到所选 Manager 构建的同一提交，
-      # 使内核 KSU 版本与拉取的管理器安装包严格一致（BakaSU 生效）
-      ksu_commit: ${{ needs.get-ksu-manager.outputs.ksuCommit }}
+      # 使内核 KSU 版本与拉取的管理器安装包严格一致（BakaSU 生效）。
+      # 显式填了「内核 KSU 对齐提交」时以它为准：自动对齐只跟随管理器 APK
+      # 对应的构建提交，用户无法直接指定内核版本，这里补上这个缺口。
+      ksu_commit: ${{ inputs.ksu_commit || needs.get-ksu-manager.outputs.ksuCommit }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_zram: ${{ inputs.use_zram }}
