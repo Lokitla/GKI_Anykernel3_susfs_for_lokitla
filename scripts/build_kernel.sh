@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # =============================================================================
-# GKI 内核构建核心脚本 —— YAML 工作流与 Python CLI 共用的单一真相源
+# GKI 内核构建核心脚本 —— GitHub Actions 与 Python CLI 共用
 #
-# 本脚本由 .github/workflows/build.yml 自动提取生成，逻辑与原工作流等价。
-# 请勿直接手工编辑本文件的阶段函数：修改请改 build.yml 后重新生成，
-# 或同步修改 build.py 与工作流，避免两套逻辑分叉。
+# 构建阶段集中在本文件；工作流负责输入、调度和产物处理，build.py 负责本地参数解析。
 #
 # 用法:
 #   ./scripts/build_kernel.sh --all                 运行完整构建
@@ -23,6 +21,8 @@ set -eo pipefail
 : "${SUB_LEVEL:=124}"
 : "${OS_PATCH_LEVEL:=2025-02}"
 : "${KSU_VARIANT:=BakaSU}"
+: "${KSU_CERT_SIZE:=}"
+: "${KSU_CERT_HASH:=}"
 : "${KSU_MODE:=关闭}"
 : "${VERSION:=}"
 : "${REVISION:=}"
@@ -115,6 +115,7 @@ export KERNEL_VERSION
 export SUB_LEVEL
 export OS_PATCH_LEVEL
 export KSU_VARIANT
+export KSU_CERT_SIZE KSU_CERT_HASH
 export KSU_MODE
 export VERSION
 export REVISION
@@ -933,6 +934,9 @@ stage_resolve_ksu_branch() {
     "Official"|"BakaSU")
       BRANCH="main"
       ;;
+    "FinaSU")
+      BRANCH="master"
+      ;;
     "SukiSU")
       case "$BRANCH_MODE" in
         main)
@@ -1200,6 +1204,102 @@ stage_add_kernelsu() {
         echo "KernelSU 已对齐到 $KSU_COMMIT（KSU 版本 = $((30700 + $(git -C KernelSU rev-list --count HEAD 2>/dev/null || echo 0)))）"
       fi
       ;;
+    "FinaSU")
+      echo "添加 FinaSU..."
+      if [ -z "${KSU_COMMIT:-}" ] || [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
+        REL_JSON=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+          https://api.github.com/repos/LyraVoid/FinaSU/releases/latest) \
+          || { echo "::error::无法读取 FinaSU 最新 Release"; return 1; }
+        REL_TAG=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' <<< "$REL_JSON")
+        if [ -z "${KSU_COMMIT:-}" ]; then
+          KSU_COMMIT=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+            "https://api.github.com/repos/LyraVoid/FinaSU/commits/$REL_TAG" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])') \
+            || { echo "::error::无法解析 FinaSU Release 对应提交"; return 1; }
+          [[ "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] \
+            || { echo "::error::FinaSU Release 返回了无效提交号"; return 1; }
+          export KSU_COMMIT
+        fi
+        if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
+          REL_APK_URL=$(python3 -c 'import json,sys; d=json.load(sys.stdin); a=[x for x in d.get("assets",[]) if x.get("name","").endswith("-release.apk")]; print(a[0]["browser_download_url"] if a else "")' <<< "$REL_JSON")
+          [ -n "$REL_APK_URL" ] || { echo "::error::FinaSU Release 未附正式签名的 release APK"; return 1; }
+          TMP_APK_DIR=$(mktemp -d)
+          curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
+            -o "$TMP_APK_DIR/manager.apk" "$REL_APK_URL" \
+            || { echo "::error::下载 FinaSU Release APK 失败"; return 1; }
+          CERT_INFO=$(python3 "$WORKSPACE/scripts/finasu_compat/extract_manager_cert.py" "$TMP_APK_DIR/manager.apk") \
+            || { echo "::error::无法提取 FinaSU 管理器签名证书"; return 1; }
+          rm -rf "$TMP_APK_DIR"
+          KSU_CERT_SIZE=$(awk 'NR == 1 {print $1}' <<< "$CERT_INFO")
+          KSU_CERT_HASH=$(awk 'NR == 1 {print $2}' <<< "$CERT_INFO")
+          export KSU_CERT_SIZE KSU_CERT_HASH
+        fi
+      fi
+      git clone --depth 1 https://github.com/LyraVoid/FinaSU.git KernelSU || {
+        echo "::error::克隆 FinaSU 失败"; return 1;
+      }
+      if [ -n "${KSU_COMMIT:-}" ]; then
+        if ! git -C KernelSU checkout --detach "$KSU_COMMIT" 2>/dev/null; then
+          git -C KernelSU fetch --no-tags origin "$KSU_COMMIT" \
+            || { echo "::error::无法获取 FinaSU Release 对应提交 $KSU_COMMIT"; return 1; }
+          git -C KernelSU checkout --detach "$KSU_COMMIT" \
+            || { echo "::error::无法检出 FinaSU Release 对应提交 $KSU_COMMIT"; return 1; }
+        fi
+        [ "$(git -C KernelSU rev-parse HEAD)" = "$KSU_COMMIT" ] \
+          || { echo "::error::FinaSU 未检出到管理器 Release 对应提交"; return 1; }
+      else
+        echo "::error::缺少 FinaSU 管理器 Release 对应提交，拒绝生成版本不匹配的内核"
+        return 1
+      fi
+
+      DRIVER_DIR="$KERNEL_ROOT/common/drivers"
+      [ -d "$DRIVER_DIR" ] || { echo "::error::未找到 GKI drivers 目录: $DRIVER_DIR"; return 1; }
+      ln -sfn "$(realpath --relative-to="$DRIVER_DIR" "$KERNEL_ROOT/KernelSU/kernel")" "$DRIVER_DIR/kernelsu"
+      grep -qE 'obj-.*CONFIG_KSU.*kernelsu/' "$DRIVER_DIR/Makefile" \
+        || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_DIR/Makefile"
+      if ! grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"; then
+        sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
+      fi
+
+      if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
+        echo "::error::未取得官方 FinaSU 管理器签名证书，无法让内核识别管理器"
+        return 1
+      fi
+      if [[ ! "$KSU_CERT_SIZE" =~ ^0x[0-9a-fA-F]{1,4}$ ]] || [[ ! "$KSU_CERT_HASH" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "::error::FinaSU 管理器证书信息格式无效"
+        return 1
+      fi
+      KBUILD_FILE="KernelSU/kernel/Kbuild"
+      [ -f "$KBUILD_FILE" ] || { echo "::error::FinaSU Kbuild 文件不存在"; return 1; }
+      if ! grep -qE '^ccflags-y[[:space:]]*\+=[[:space:]]*-DEXPECTED_HASH=' "$KBUILD_FILE"; then
+        echo "::error::FinaSU Kbuild 缺少 EXPECTED_HASH 锚点，无法配置第二管理器证书槽"
+        return 1
+      fi
+      if ! grep -q '^KSU_EXPECTED_SIZE2[[:space:]]*:=' "$KBUILD_FILE"; then
+        awk -v size="$KSU_CERT_SIZE" -v hash="$KSU_CERT_HASH" '
+          !done && /^ccflags-y[[:space:]]*\+=[[:space:]]*-DEXPECTED_HASH=/ {
+            print
+            print "KSU_EXPECTED_SIZE2 := " size
+            print "KSU_EXPECTED_HASH2 := " hash
+            print "KSU_SECOND_SIGNATURE_RELEASE := 1"
+            done=1
+            next
+          }
+          { print }
+          END { if (!done) exit 1 }
+        ' "$KBUILD_FILE" > "$KBUILD_FILE.new" \
+          && mv "$KBUILD_FILE.new" "$KBUILD_FILE" \
+          || { rm -f "$KBUILD_FILE.new"; echo "::error::写入 FinaSU 证书信任配置失败"; return 1; }
+      else
+        sed -i -E \
+          -e "s|^KSU_EXPECTED_SIZE2[[:space:]]*:=.*|KSU_EXPECTED_SIZE2 := $KSU_CERT_SIZE|" \
+          -e "s|^KSU_EXPECTED_HASH2[[:space:]]*:=.*|KSU_EXPECTED_HASH2 := $KSU_CERT_HASH|" \
+          "$KBUILD_FILE"
+      fi
+      grep -q '^KSU_SECOND_SIGNATURE_RELEASE[[:space:]]*:= 1$' "$KBUILD_FILE" \
+        || echo 'KSU_SECOND_SIGNATURE_RELEASE := 1' >> "$KBUILD_FILE"
+      echo "已将官方 FinaSU 管理器证书写入内核第二信任槽"
+      ;;
     *)
       if [ -z "$LEGACY_SUKISU_CONFIG" ]; then
         echo "未知变体: ${KSU_VARIANT}" >&2
@@ -1268,7 +1368,7 @@ stage_add_kernelsu() {
   KPM_SUPPORTED=1
   if [ -d "KernelSU" ] && { [[ "${USE_KPM}" == enabled* ]] || [[ "${USE_KPM}" == patched* ]]; }; then
     case "${KSU_VARIANT}" in
-      BakaSU|Official|Next)
+      BakaSU|Official|Next|FinaSU)
         KPM_SUPPORTED=0
         echo "::warning::变体 ${KSU_VARIANT} 的内核不提供 KPM（Kconfig 里没有 config KPM）"
         echo "::warning::本次构建已按 ${USE_KPM} 请求 KPM，但 KPM 相关阶段会全部跳过："
@@ -1457,7 +1557,7 @@ stage_susfs_baseline() {
 
 # 条件执行（等价原工作流 if:）
 run_susfs_baseline() {
-  if [ "$EXPORT_SUSFS_PATCHES" = "true" ] && [ "$ENABLE_SUSFS" = "true" ] && [ "$KSU_MODE" != "禁用KSU" ] && { [ "$KSU_VARIANT" = "SukiSU" ] || [ "$KSU_VARIANT" = "BakaSU" ]; }; then
+  if [ "$EXPORT_SUSFS_PATCHES" = "true" ] && [ "$ENABLE_SUSFS" = "true" ] && [ "$KSU_MODE" != "禁用KSU" ] && { [ "$KSU_VARIANT" = "SukiSU" ] || [ "$KSU_VARIANT" = "BakaSU" ] || [ "$KSU_VARIANT" = "FinaSU" ]; }; then
     stage_susfs_baseline "$@"
   else
     echo "跳过阶段: susfs_baseline（条件不满足）"
@@ -1522,6 +1622,9 @@ stage_apply_susfs() {
   # 拿到的就不是"原始补丁能否落地"的结论。apply.sh 打完原始补丁会写出
   # $SUSFS_PROBE_DIR/apply.json 并直接结束；编译结论再由 build.yml 末尾的
   # 「写入 SUSFS 探测结果」步骤合并成 result.json。
+  if [ "${KSU_VARIANT}" = "FinaSU" ]; then
+    bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "$KERNEL_ROOT/KernelSU"
+  fi
   bash "$WORKSPACE/scripts/susfs_fixes/apply.sh"
   cd "$_pwd"
 

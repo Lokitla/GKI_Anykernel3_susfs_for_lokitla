@@ -67,8 +67,8 @@ case "$KSU_VARIANT" in
 
     cd ..
     ;;
-  "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
-    echo "Next/SukiSU/SukiSU(40726)/SukiSU(40548)/BakaSU 使用内置 SUSFS 支持"
+  "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU"|"FinaSU")
+    echo "$KSU_VARIANT 的 SUSFS KernelSU 侧适配已由上游集成补丁提供"
     ;;
 esac
 

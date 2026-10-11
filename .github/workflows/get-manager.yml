@@ -44,6 +44,12 @@ on:
       ksuCommit:
         description: "所选 Manager 构建对应的提交 SHA（内核侧对齐用；空=未对齐）"
         value: ${{ jobs.get_ksu_manager.outputs.ksuCommit }}
+      managerCertSize:
+        description: "FinaSU 管理器签名证书 DER 长度"
+        value: ${{ jobs.get_ksu_manager.outputs.managerCertSize }}
+      managerCertHash:
+        description: "FinaSU 管理器签名证书 SHA-256"
+        value: ${{ jobs.get_ksu_manager.outputs.managerCertHash }}
 
 jobs:
   get_ksu_manager:
@@ -57,6 +63,8 @@ jobs:
       managerVer: ${{ steps.add_KSU.outputs.managerVer }}
       # 输出4: 所选 Manager 构建的提交 SHA（ksu_commit 对齐用）
       ksuCommit: ${{ steps.align_commit.outputs.ksuCommit }}
+      managerCertSize: ${{ steps.add_KSU.outputs.managerCertSize }}
+      managerCertHash: ${{ steps.add_KSU.outputs.managerCertHash }}
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
@@ -99,7 +107,9 @@ jobs:
       - name: 检出本仓库配置
         uses: actions/checkout@v7
         with:
-          sparse-checkout: config
+          sparse-checkout: |
+            config
+            scripts/finasu_compat/extract_manager_cert.py
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
@@ -143,6 +153,18 @@ jobs:
           elif [ "$KSU_VARIANT" == "BakaSU" ]; then
             echo "This is the BakaSU variant"
             git clone https://github.com/Baka-SU/BakaSU.git KernelSU
+          elif [ "$KSU_VARIANT" == "FinaSU" ]; then
+            echo "This is the FinaSU variant"
+            git clone https://github.com/LyraVoid/FinaSU.git KernelSU
+            REL_JSON=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+              https://api.github.com/repos/LyraVoid/FinaSU/releases/latest)
+            REL_TAG=$(jq -er '.tag_name | strings | select(length > 0)' <<< "$REL_JSON")
+            REL_COMMIT=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+              "https://api.github.com/repos/LyraVoid/FinaSU/commits/$REL_TAG" \
+              | jq -er '.sha | strings | select(test("^[0-9a-f]{40}$"))')
+            git -C KernelSU fetch --no-tags origin "$REL_COMMIT"
+            git -C KernelSU checkout --detach "$REL_COMMIT"
+            echo "FINASU_RELEASE_COMMIT=$REL_COMMIT" >> "$GITHUB_ENV"
           elif [ "$KSU_VARIANT" == "Official" ]; then
             echo "This is the Official"
             git clone https://github.com/tiann/KernelSU.git KernelSU
@@ -218,6 +240,8 @@ jobs:
             KSU_VERSION=$((20000 + KSU_GIT_VERSION))
           elif [ "$KSU_VARIANT" == "Next" ]; then
             KSU_VERSION=$((30000 + KSU_GIT_VERSION))
+          elif [ "$KSU_VARIANT" == "FinaSU" ]; then
+            KSU_VERSION=$((30000 + KSU_GIT_VERSION))
           fi
           echo $KSU_VERSION
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
@@ -259,6 +283,55 @@ jobs:
               exit 1
             fi
             curl -fL -o "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" "$MANAGER_URL"
+            exit 0
+          fi
+
+          if [ "$KSU_VARIANT" = "FinaSU" ]; then
+            REL_TAG=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+              https://api.github.com/repos/LyraVoid/FinaSU/releases/latest \
+              | jq -er '.tag_name | strings | select(length > 0)')
+            REL_JSON=$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+              "https://api.github.com/repos/LyraVoid/FinaSU/releases/tags/$REL_TAG")
+            REL_APK_URL=$(jq -r '[.assets[] | select(.name | endswith("-release.apk"))][0].browser_download_url // empty' <<< "$REL_JSON")
+            if [ -z "$REL_APK_URL" ]; then
+              echo "::error::FinaSU Release $REL_TAG 中没有正式签名的 release APK"
+              exit 1
+            fi
+            if [ "$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 \
+              "https://api.github.com/repos/LyraVoid/FinaSU/commits/$REL_TAG" \
+              | jq -er '.sha')" != "$FINASU_RELEASE_COMMIT" ]; then
+              echo "::error::FinaSU 最新 Release 在本次流程中发生变化，请重新触发以保持内核和 APK 对齐"
+              exit 1
+            fi
+            mkdir -p manager-artifacts
+            REL_APK="manager-artifacts/$(basename "$REL_APK_URL")"
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
+              -o "$REL_APK" "$REL_APK_URL"
+            unzip -tq "$REL_APK" >/dev/null 2>&1 || {
+              echo "::error::FinaSU 下载文件不是有效 APK/ZIP"; exit 1;
+            }
+            CERT_INFO=$(python3 "$GITHUB_WORKSPACE/scripts/finasu_compat/extract_manager_cert.py" "$REL_APK") || {
+              echo "::error::无法从 FinaSU Release APK 提取签名证书"; exit 1;
+            }
+            CERT_SIZE=$(awk 'NR == 1 {print $1}' <<< "$CERT_INFO")
+            CERT_HASH=$(awk 'NR == 1 {print $2}' <<< "$CERT_INFO")
+            [[ "$CERT_SIZE" =~ ^0x[0-9a-fA-F]{1,4}$ && "$CERT_HASH" =~ ^[0-9a-fA-F]{64}$ ]] || {
+              echo "::error::FinaSU APK 签名证书格式校验失败"; exit 1;
+            }
+            MANAGER_VERSION=$(basename "$REL_APK" | grep -oE '[0-9]{4,}' | head -n 1 || true)
+            if ! [[ "$MANAGER_VERSION" =~ ^[0-9]+$ ]]; then
+              MANAGER_VERSION="$KSU_VERSION"
+            fi
+            [ "$MANAGER_VERSION" = "$KSU_VERSION" ] || {
+              echo "::error::FinaSU APK 版本 $MANAGER_VERSION 与内核预期 $KSU_VERSION 不一致"; exit 1;
+            }
+            echo "MANAGER_VERSION=$MANAGER_VERSION" >> "$GITHUB_ENV"
+            echo "MANAGER_SHA=$FINASU_RELEASE_COMMIT" >> "$GITHUB_ENV"
+            echo "MANAGER_MATCHED=1" >> "$GITHUB_ENV"
+            echo "managerVer=$MANAGER_VERSION" >> "$GITHUB_OUTPUT"
+            echo "managerCertSize=$CERT_SIZE" >> "$GITHUB_OUTPUT"
+            echo "managerCertHash=$CERT_HASH" >> "$GITHUB_OUTPUT"
+            echo "FinaSU $REL_TAG APK 已下载；版本、提交与签名证书校验通过"
             exit 0
           fi
 

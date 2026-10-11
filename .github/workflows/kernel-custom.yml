@@ -28,6 +28,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - BakaSU
+          - FinaSU
           - Official
           - Next
         default: BakaSU
@@ -146,7 +147,7 @@ on:
         type: boolean
         default: false
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 表示该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核) / abc123...|def456...。第 1 段同时决定管理器 APK 与内核 KernelSU 检出的提交；留空或 0 则由自动对齐决定内核版本"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 表示该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核) / abc123...|def456...。第 1 段决定管理器与内核提交；FinaSU 固定使用官方 Release 对应提交并忽略该段，留空或 0 则自动对齐"
         required: false
         type: string
         default: ""
@@ -339,10 +340,12 @@ jobs:
       revision: "r1"
       ksu_variant: ${{ inputs.kernelsu_variant }}
       # 内核侧 KernelSU 检出到所选 Manager 构建的同一提交，
-      # 使内核 KSU 版本与拉取的管理器安装包严格一致（BakaSU 生效）。
+      # 使内核 KSU 版本与拉取的管理器安装包严格一致（BakaSU / FinaSU）。
       # 这只是「未指定」时的兜底：build.yml 内部会优先用合并输入框第 1 段
       # （管理器&内核KSU 共用），本值仅在该段为 0/空时生效。
       ksu_commit: ${{ needs.get-ksu-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-ksu-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-ksu-manager.outputs.managerCertHash }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_zram: ${{ inputs.use_zram }}

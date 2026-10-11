@@ -1,3 +1,5 @@
+> **AI 辅助修改声明：** 本仓库近期内容经过 AI 辅助修改，尚未完成人工审核。许可、兼容性和构建结果均未完成全面复核。**不建议 fork 本仓库，也不建议使用本仓库构建或分发的产物。**
+
 <div align="center">
 
 # GKI KernelSU SUSFS
@@ -58,7 +60,7 @@
 
 可选功能由工作流输入或本地 CLI 参数控制；不同构建入口提供的选项略有差异，详细参数以 [本地构建文档](docs/local-build.md) 和对应 workflow 为准。
 
-- KernelSU 变体：SukiSU、BakaSU、Official、Next，以及保留的旧版 SukiSU 构建。
+- KernelSU 变体：SukiSU、BakaSU、FinaSU、Official、Next，以及保留的旧版 SukiSU 构建。
 - SUSFS 集成与补丁适配；可按需导出补丁。
 - ZRAM/LZ4KD 优化；6.12 使用本仓库维护的补丁。
 - 可选 KPM、BBR 与网络配置、Baseband Guard、Re-Kernel、NoMount、Droidspaces/NTSync 和 GhostLock 修复。
@@ -98,6 +100,6 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 
 ## 来源与许可
 
-本项目包含多个上游项目的代码、补丁和配置。版权、来源与许可信息以各文件标头、[NOTICE](NOTICE) 和上游仓库中的许可证为准。分发构建产物前，请确认相关许可证及源码提供要求。
+本项目包含多个上游项目的代码、补丁和配置，不能用单一许可证概括。当前审查发现 SUSFS 内核补丁标注为 GPL-3.0-or-later，而 Linux 内核主体为 GPL-2.0-only；两者组合用于同一内核产物存在许可不兼容风险。当前文档和 `LICENSE` 不能消除此风险。详见 [NOTICE](NOTICE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-主要上游包括 [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS)、[LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)、[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)、[KernelSU](https://github.com/tiann/KernelSU) 和 [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)。更多来源见 [NOTICE](NOTICE)。
+主要上游包括 [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS)、[LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)、[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)、[FinaSU](https://github.com/LyraVoid/FinaSU)、[KernelSU](https://github.com/tiann/KernelSU) 和 [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)。FinaSU 已接入管理器获取、内核版本对齐及第二签名证书信任配置；来源与许可信息见 [NOTICE](NOTICE)。
