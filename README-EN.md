@@ -1,3 +1,5 @@
+> **AI-assisted changes:** Recent changes were made with AI assistance and have not completed human review. Licensing, compatibility, and build results have not been fully audited. **Forking this repository and using or redistributing builds produced from it are not recommended.**
+
 <div align="center">
 
 # GKI KernelSU SUSFS
@@ -98,6 +100,6 @@ Scheduled workflows check for updates to SukiSU and BakaSU and can trigger build
 
 ## Sources and licensing
 
-This project includes code, patches, and configuration from multiple upstream projects. Copyright, source, and licensing information is governed by file headers, [NOTICE](NOTICE), and the licenses in the respective upstream repositories. Check the applicable licenses and source-distribution requirements before redistributing build artifacts.
+This project includes code, patches, and configuration from multiple upstream projects and cannot be described by a single license. The current review found that the SUSFS kernel patches are marked GPL-3.0-or-later, while the Linux kernel is GPL-2.0-only. Combining them in one kernel build presents a license-compatibility risk. This repository's `LICENSE` and notices cannot remove that risk. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Major upstream projects include [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS), [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3), [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra), [KernelSU](https://github.com/tiann/KernelSU), and [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu). See [NOTICE](NOTICE) for the full list.
