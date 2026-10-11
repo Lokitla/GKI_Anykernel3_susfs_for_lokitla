@@ -137,7 +137,7 @@ permissions:
       # 无法在 with: 里直接拆），拆分结果仍走原有的 SUKISU_COMMIT / SUSFS_COMMIT
       # 校验逻辑，行为不变。
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash，可选逗号后接 SUSFS hash；留空则不锁定）"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
         required: false
         type: string
         default: ""
@@ -250,7 +250,9 @@ jobs:
         echo "ksu_commit=$sukisu" >> "$GITHUB_OUTPUT"
         echo "解析结果: 管理器&内核KSU='${sukisu:-<不锁定>}'  SUSFS='${susfs:-<不锁定>}'"
     - name: 应用自定义提交
-      if: ${{ inputs.manager_commit != '' || inputs.sukisu_commit != '' || inputs.susfs_commit != '' }}
+      # 用解析结果判断，不能用原始入参：填 "0,0" / "0" 时原始值非空但两段都是「不指定」，
+      # 照旧判断会让这一步空跑一次并把 config 的 custom 置为 true。
+      if: ${{ steps.resolve_commits.outputs.sukisu_commit != '' || steps.resolve_commits.outputs.susfs_commit != '' }}
       # 安全：所有外部输入一律经 env 传入，run 块中不得出现 ${{ }}。
       # ${{ }} 在 shell 解析之前完成文本替换，直接内插会形成 Actions 注入面。
       env:

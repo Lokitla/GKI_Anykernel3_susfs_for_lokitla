@@ -130,7 +130,7 @@ on:
           - "builtin"
         default: "auto"
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash；可选用英文逗号后接 SUSFS hash，留空则不锁定）"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
         required: false
         type: string
         default: ""
@@ -229,7 +229,7 @@ on:
         type: string
         default: "auto"
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash；可选用英文逗号后接 SUSFS hash，留空则不锁定）"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
         required: false
         type: string
         default: ""
