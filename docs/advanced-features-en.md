@@ -122,7 +122,7 @@ any existing `=m` to `=y`.
 The build fetches `setup.sh` from upstream and runs it, then verifies the `fs/nomount` symlink is
 in place before appending `CONFIG_NOMOUNT=y` to the defconfig.
 
-This phase (`integrate_nomount`) is #25 of the 47 build phases, and its **position is a hard
+This phase (`integrate_nomount`) is #26 of the 48 build phases, and its **position is a hard
 constraint**:
 
 - it must run **after** `gen_susfs_patch` — otherwise its changes leak into the exported `susfs.patch`

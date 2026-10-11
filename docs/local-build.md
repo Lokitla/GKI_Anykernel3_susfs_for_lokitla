@@ -3,7 +3,7 @@
 不依赖 GitHub Actions，直接在本机构建内核。
 
 **本地与云端共用同一份构建逻辑** —— 入口 `build.py` 只做参数解析，真正的步骤全部在
-[`scripts/build_kernel.sh`](../scripts/build_kernel.sh) 里（47 个阶段）。两者行为完全一致，
+[`scripts/build_kernel.sh`](../scripts/build_kernel.sh) 里（48 个阶段）。两者行为完全一致，
 不存在两套维护分叉。
 
 > 改构建行为请改 `scripts/build_kernel.sh`，不要在 `.github/workflows/build.yml` 里重写 shell ——
@@ -28,7 +28,7 @@
 # 查看支持的版本组合（数据来自 data/）
 python3 build.py --list-configs
 
-# 列出全部 47 个构建阶段
+# 列出全部 48 个构建阶段
 python3 build.py --list-phases
 
 # 构建单个版本
@@ -105,7 +105,7 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 ## 断点续建与单步调试
 
-构建分为 47 个阶段，`--list-phases` 可查看完整列表与编号。内核构建动辄数十分钟，
+构建分为 48 个阶段，`--list-phases` 可查看完整列表与编号。内核构建动辄数十分钟，
 全量重跑代价很高，用这两个参数可以只重跑出问题的那一段：
 
 ```bash
@@ -124,7 +124,8 @@ python3 build.py --android android14 --kernel 6.1 --from patch_kpm_image
 ## 注意事项
 
 - **「清理磁盘空间」只在 GitHub Actions runner 上执行**，本地构建会自动跳过，以免误删你机器上的文件。
-- `--kpm` 在 6.6 内核上会自动跳过镜像修补（该内核不支持）。
+- `--kpm` 在内核 ≥ 6.10 时会被脚本强制关闭（`KPM_SUPPORTED=0`：KPM 代码用了新内核已移除的
+  `netlink_kernel_cfg.cb_mutex`）；**6.6 及以下是支持的**，原先文档把边界写反了。
 - 各开关的默认值与 Actions 保持一致：ZRAM 默认**开启**，其余可选功能默认关闭。
 
 ---

@@ -46,7 +46,7 @@ release presentation as reference, and [LingLuo17](https://github.com/LingLuo17)
 
 ```
 GitHub Actions  ──┐
-                  ├──►  scripts/build_kernel.sh  (47 stages, single source of build logic)
+                  ├──►  scripts/build_kernel.sh  (48 stages, single source of build logic)
 local build.py  ──┘
 ```
 
@@ -88,7 +88,7 @@ formats, the KernelSU manager and the SUSFS companion module.
 |---|---|---|---|---|---|---|---|
 | **auto** (slim) | 5 | 6 | 5 | 3 | — | **19** | Auto trigger; single-version entries called by `main.yml` |
 | **full** | 22 | 20 | 23 | 15 | 4 | **84** | Manually triggered single-version entries |
-| **data set** | 36 | 35 | 32 | 16 | 8 | **127** | "All available versions" in `data/`; source of `build.py --all` |
+| **data set** | 36 | 35 | 32 | 17 | 8 | **128** | "All available versions" in `data/`; source of `build.py --all` |
 
 > **6.12 is not in the auto matrix**, so neither the auto trigger nor "Build kernels"
 > includes it (ticking `include_612` won't help). For 6.12, **manually trigger
@@ -343,7 +343,7 @@ python3 build.py --android android12 --kernel 5.10 --sub-level 236 \
                  --zram --net-enhance --nomount --rekernel
 ```
 
-Supports all 47 stages, resume from a stage (`--from`) and re-run a single stage
+Supports all 48 stages, resume from a stage (`--from`) and re-run a single stage
 (`--only`). Full options: [docs/local-build-en.md](docs/local-build-en.md).
 
 ---
@@ -352,7 +352,7 @@ Supports all 47 stages, resume from a stage (`--from`) and re-run a single stage
 
 | Path | Purpose |
 |---|---|
-| `scripts/build_kernel.sh` | **Single source of build logic**, 47 stages |
+| `scripts/build_kernel.sh` | **Single source of build logic**, 48 stages |
 | `build.py` | Local CLI entry; only parses args and calls the script above |
 | `.github/workflows/build.yml` | Reusable build workflow (cache / artifacts / logs / notify) |
 | `.github/workflows/main.yml` | "Build kernels" top-level entry, expands the matrix |
@@ -363,8 +363,10 @@ Supports all 47 stages, resume from a stage (`--from`) and re-run a single stage
 | `.github/workflows/Auto_Trigger_SukiSU.yml` | Detects SukiSU upstream updates and triggers builds (SukiSU variant) |
 | `.github/workflows/get-manager.yml` | Fetches manager APKs |
 | `.github/workflows/update-pages.yml` | Updates `data/` and deploys Pages |
+| `.github/workflows/susfs-probe.yml` | **Batch tool**: full builds with raw SUSFS patches, calibrates the compatibility line |
+| `scripts/susfs_probe/` | Matrix generation / result-summary scripts for probing |
 | `config/` | Config fragments, `config/config` commit pinning |
-| `data/` | Available kernel sublevels and patch levels (127 entries) |
+| `data/` | Available kernel sublevels and patch levels (128 entries) |
 | `security_patch/` | CVE-2026-43499 fix chain |
 | `zram/` | ARM64 NEON accelerated LZ4 implementation |
 | `web/` | GitHub Pages site source |
