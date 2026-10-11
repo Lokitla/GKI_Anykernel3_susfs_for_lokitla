@@ -3604,6 +3604,15 @@ main() {
     return
   fi
 
+  # --from 的 target 必须校验：拼不上任何阶段时 started 恒为 false，
+  # 循环全程 continue，最后却 exit 0 —— 变成「什么都没跑却报成功」的假成功。
+  if [ "$mode" = "from" ] && ! printf '%s\n' "${PHASES[@]}" | grep -qx "$target"; then
+    echo "未知起始阶段: ${target}" >&2
+    echo "可用阶段：" >&2
+    printf '  %s\n' "${PHASES[@]}" >&2
+    exit 1
+  fi
+
   local started=false
   local failed_phase=""
   for p in "${PHASES[@]}"; do
