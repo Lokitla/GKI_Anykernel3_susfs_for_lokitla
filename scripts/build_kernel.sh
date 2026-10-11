@@ -1626,7 +1626,8 @@ stage_apply_susfs() {
   # $SUSFS_PROBE_DIR/apply.json 并直接结束；编译结论再由 build.yml 末尾的
   # 「写入 SUSFS 探测结果」步骤合并成 result.json。
   if [ "${KSU_VARIANT}" = "FinaSU" ]; then
-    bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "$KERNEL_ROOT/KernelSU"
+    bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "$KERNEL_ROOT/KernelSU" \
+      || { cd "$_pwd"; return 1; }
     if grep -q 'ksu_patch_text' "$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"; then
       echo "::error::FinaSU SUSFS 适配后仍保留 ksu_patch_text，拒绝继续构建以避免 SELinux 隐藏冲突"
       return 1
