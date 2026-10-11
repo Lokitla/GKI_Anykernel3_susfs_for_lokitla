@@ -16,15 +16,22 @@
 #
 # 安全：参数来自工作流 env，脚本内不做 eval，所有变量加引号。
 
-set -uo pipefail
+# 必须带 -e：缺了它，--variant/--ref 少给取值时 shift 2 失败却不终止，
+# while [ $# -gt 0 ] 因 $# 不变而死循环，CI 上会一直挂到超时。
+set -euo pipefail
 
 VARIANT="BakaSU"
 REF="main"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --variant) VARIANT="${2:-}"; shift 2 ;;
-    --ref)     REF="${2:-}";     shift 2 ;;
+    --variant)
+      # 双保险：就算 -e 被移除，这里也会显式报错而不是死循环
+      [ $# -ge 2 ] || { echo "::error::--variant 缺少取值（用法见 $0 --help）" >&2; exit 2; }
+      VARIANT="$2"; shift 2 ;;
+    --ref)
+      [ $# -ge 2 ] || { echo "::error::--ref 缺少取值（用法见 $0 --help）" >&2; exit 2; }
+      REF="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "未知参数: $1（用法见 $0 --help）" >&2; exit 2 ;;
   esac
