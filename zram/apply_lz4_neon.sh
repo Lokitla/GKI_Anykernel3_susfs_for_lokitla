@@ -56,7 +56,7 @@ elif already_patched "$file"; then
 else
   perl -i -0777 -pe '
     s{(\t)ret = LZ4_decompress_safe\(dic->cbuf->cdata, dic->rbuf,\s*\n\s*dic->clen, dic->rlen\);}
-     {#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n${1}ret = LZ4_arm64_decompress_safe(dic->cbuf->cdata, dic->rbuf,\n\t\t\t\t\t\tdic->clen, dic->rlen, false);\n#else\n${1}ret = LZ4_decompress_safe(dic->cbuf->cdata, dic->rbuf,\n\t\t\t\t\t\tdic->clen, dic->rlen, false);\n#endif}
+     {#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n${1}ret = LZ4_arm64_decompress_safe(dic->cbuf->cdata, dic->rbuf,\n\t\t\t\t\t\tdic->clen, dic->rlen, false);\n#else\n${1}ret = LZ4_decompress_safe(dic->cbuf->cdata, dic->rbuf,\n\t\t\t\t\t\tdic->clen, dic->rlen);\n#endif}
   ' "$file"
 
   if already_patched "$file"; then
