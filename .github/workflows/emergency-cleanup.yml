@@ -1,5 +1,10 @@
 name: Emergency Release Cleanup
 
+# 本工作流会 gh release edit / delete / create，必须显式声明 contents: write。
+# 缺顶层 permissions 时只能依赖仓库默认 token 权限；默认设为只读则整条流程失败。
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
