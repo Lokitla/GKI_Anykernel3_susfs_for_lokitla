@@ -97,7 +97,7 @@ jobs:
       # 读取 config/config 里的自定义提交配置，使管理器的版本选取
       # 与内核构建使用的 SukiSU 提交保持一致（此前管理器永远跟随最新提交）。
       - name: 检出本仓库配置
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           sparse-checkout: config
           sparse-checkout-cone-mode: false
