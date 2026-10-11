@@ -172,7 +172,7 @@ on:
       # 自动触发（Auto_Trigger）已占满 24 个必需字段，手动专用项只能留一个（保留 version）。
       # 其转发处用 ${{ inputs.ksu_branch_mode || 'auto' }} 兜底，不声明时自然回退 auto。
       manager_commit:
-        description: "管理器提交 hash（SukiSU/管理器 hash；可选用英文逗号后接 SUSFS hash，留空则不锁定）"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
         required: false
         type: string
         default: ""

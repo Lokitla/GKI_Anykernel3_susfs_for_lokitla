@@ -276,9 +276,10 @@ jobs:
   build-kernels-a16-6-12:
     needs: [prepare-matrix, get-ksu-manager]
     # 管理器拉取失败/被跳过时不阻塞内核构建（ksuCommit 为空则内核跟随 main HEAD）
-    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' }}
+    # 两个条件必须写在同一条 if 里：YAML 同层重复键会让后一个覆盖前一个
+    # （或直接解析报错），无论哪种都会丢掉一半语义。
+    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' && needs.prepare-matrix.outputs.count != '0' }}
     name: "6.12.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
-    if: needs.prepare-matrix.outputs.count != '0'
     strategy:
       fail-fast: false
       matrix:
