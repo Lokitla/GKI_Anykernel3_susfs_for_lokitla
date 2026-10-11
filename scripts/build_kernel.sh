@@ -1337,7 +1337,10 @@ stage_add_kernelsu() {
     #   命中就加 -DKSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE，把 selinux_hide.c
     #   里整段 ksu_patch_text 用 #ifndef 剔除。这类源码里 grep ksu_patch_text
     #   必然命中，但编译出来是干净内核，按"main 血统"拦就是误报。
-    if [ "${ENABLE_SUSFS}" = "true" ] && [ -f "KernelSU/kernel/feature/selinux_hide.c" ]; then
+    # FinaSU 的 SUSFS 适配在 apply_susfs 阶段才会替换这段 hook；此处检查的是
+    # 尚未适配的上游源码，不能据此判断最终组合。适配脚本会在补丁落地后检查结果。
+    if [ "${ENABLE_SUSFS}" = "true" ] && [ "${KSU_VARIANT}" != "FinaSU" ] \
+       && [ -f "KernelSU/kernel/feature/selinux_hide.c" ]; then
       KSU_HIDE_SRC="KernelSU/kernel/feature/selinux_hide.c"
       if grep -q "KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE" "$KSU_HIDE_SRC"; then
         echo "SELinux 兼容性校验通过：selinux_hide.c 的 ksu_patch_text 受 KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 包裹"
@@ -1624,6 +1627,11 @@ stage_apply_susfs() {
   # 「写入 SUSFS 探测结果」步骤合并成 result.json。
   if [ "${KSU_VARIANT}" = "FinaSU" ]; then
     bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "$KERNEL_ROOT/KernelSU"
+    if grep -q 'ksu_patch_text' "$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"; then
+      echo "::error::FinaSU SUSFS 适配后仍保留 ksu_patch_text，拒绝继续构建以避免 SELinux 隐藏冲突"
+      return 1
+    fi
+    echo "FinaSU SELinux 校验通过：适配后的 selinux_hide.c 不再包含 ksu_patch_text"
   fi
   bash "$WORKSPACE/scripts/susfs_fixes/apply.sh"
   cd "$_pwd"
