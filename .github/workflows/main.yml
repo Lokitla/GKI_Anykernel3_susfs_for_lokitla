@@ -92,9 +92,7 @@ on:
         default: true
 
       # ==================== 构建目标 ====================
-      # 原先这里是 build_a12_5_10 ~ build_a16_6_12 五个布尔开关，占掉 5 个名额。
-      # workflow_dispatch 上限 25，为腾出名额给 supp_op / sukisu_commit /
-      # susfs_commit / use_net_enhance，合并成一个逗号分隔的字符串。
+      # 用逗号分隔的目标列表控制各 Android 版本，减少 workflow_dispatch 输入项。
       # 写法：a12 / a13 / a14 / a15 / a16，或 all（全部，含 6.12）。
       # 例：a12,a15    只构建 5.10 与 6.6
       #     all        全部五个（等价于旧的 build_all=true）
@@ -110,7 +108,7 @@ on:
         type: boolean
         default: true
       use_bbg:
-        description: "启用 BBG 防格机"
+        description: "启用 BBG 基带保护（防止基带分区被擦除）"
         type: boolean
         default: false
       use_rekernel:
@@ -140,8 +138,7 @@ on:
         required: false
         type: boolean
         default: true
-      # supp_op 恢复显示：原先因 25 input 上限被隐藏，名额让给了 use_nomount。
-      # 本次把 5 个 build_a1x 布尔开关合并为 build_targets 后腾出名额，故补回。
+      # 一加 8E 支持开关仅适用于对应设备。
       supp_op:
         description: "启用一加 8E 支持（非一加设备勿开）"
         required: false
@@ -649,7 +646,7 @@ jobs:
   # 当 release_type 不是 Actions 时，创建 GitHub Release
   # 仅限原仓库运行，fork 仓库跳过此步骤
   release:
-    # [融合] 原条件硬编码 upstream 仓库，导致 fork 后永远不发布 Release；
+    # 原条件硬编码 upstream 仓库，导致 fork 后永远不发布 Release；
     # 现在只保留“发布类型 != Actions”这一个判断，任何 fork 都能按选择发布。
     if: ${{ always() && !cancelled() && inputs.release_type != 'Actions' }}
     runs-on: ubuntu-24.04
@@ -726,7 +723,7 @@ jobs:
           fi
 
           # 发布标题与 KernelSU / SUSFS 模式（GITHUB_ENV 中后写入的同名变量会覆盖前面的值）
-          # [融合] 三态选择已简化为「是否集成 SUSFS」，纯净 GKI 不再提供
+          # 三态选择已简化为「是否集成 SUSFS」，纯净 GKI 不再提供
           if [[ "${{ inputs.enable_susfs }}" != "true" ]]; then
             echo "SUS_VER=未集成" >> $GITHUB_ENV
             echo "RELEASE_HEADLINE=**${KSU_NAME} ${KSU_VER}**（未集成 SUSFS）" >> $GITHUB_ENV
@@ -1079,7 +1076,7 @@ jobs:
             [ -d "$file" ] && continue
             # 跳过 -Rejects 目录中的文件（已在 collect-rejects 中汇总处理）
             [[ "$file" == *-Rejects/* ]] && continue
-            # A-3：Build-Logs 是失败诊断用的日志，不是可刷写产物，不能进 Release
+            # Build-Logs 是失败诊断用的日志，不是可刷写产物，不能进 Release
             [[ "$file" == *-Build-Logs/* ]] && continue
             echo "上传 $file..."
             # B-2：同名资产已存在时必须 --clobber，否则重跑发布会静默漏掉产物

@@ -194,6 +194,16 @@ if grep -qF 'VMA_PAD_START(vma)' "$SUSFS_PATCH" \
   sed -i 's/VMA_PAD_START(vma)/vma->vm_end/g' "$SUSFS_PATCH"
 fi
 
+# Android 12 / 5.10 的 set_nameidata 只有三个参数；SUSFS 上游补丁在
+# 兼容修复合入前可能仍带四参数调用。仅在目标 API 与补丁内容同时匹配时改写，
+# 上游修复后或其他内核版本均保持原补丁不变。
+if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]] \
+  && grep -qF 'static void set_nameidata(struct nameidata *p, int dfd, struct filename *name)' fs/namei.c \
+  && grep -qF 'set_nameidata(nd, old_dfd, fake_filename, NULL);' "$SUSFS_PATCH"; then
+  echo "检测到 Android 12 / 5.10 的三参数 set_nameidata API，修正 SUSFS 补丁调用"
+  sed -i 's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' "$SUSFS_PATCH"
+fi
+
 adjust_legacy_fdinfo_context() {
   sed -i '/^[[:space:]]*\/\*$/,/^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$/d' fs/notify/fdinfo.c
   perl -i -pe 's/\bmask,\s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
@@ -281,11 +291,8 @@ if grep -q '^ static int thaw_super_locked' "$SUSFS_PATCH" \
   SUPER_FS_H_REMOVED=1
 fi
 
-# SUSFS 主补丁必须真正落地。此前这里写作 `patch -p1 < "$SUSFS_PATCH" || true`：
-# 补丁上下文一旦漂移（子版本升级、SUSFS 上游改补丁、KSU 分支切换），patch 会静默失败
-# 并留下 .rej，构建照常跑完、产出能开机的内核，而 SUSFS / SELinux 隐藏其实根本没生效
-# —— u:r:ksu:s0 之类的上下文泄漏就是这么来的，刷机上很难反推回这里。
-# 所以：patch 硬失败当场终止；残留 .rej 也默认终止（除非显式 ALLOW_SUSFS_REJ=1）。
+# SUSFS 主补丁必须完整应用。默认遇到补丁拒绝即终止构建；只有显式设置
+# ALLOW_SUSFS_REJ=1 时才允许保留 .rej 并继续。
 apply_patch_checked "SUSFS 主补丁" "$SUSFS_PATCH"
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为

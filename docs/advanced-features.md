@@ -115,7 +115,7 @@ bazel 会直接构建失败。所以本阶段写入时会把已存在的 `=m` �
 构建期从上游拉取 `setup.sh` 并执行，完成后校验 `fs/nomount` 软链接是否就位，
 再向 defconfig 追加 `CONFIG_NOMOUNT=y`。
 
-该阶段（`integrate_nomount`）在 48 个构建阶段中排第 26 位，**顺序有硬约束**：
+阶段 `integrate_nomount` 必须位于这些阶段之间，**顺序有硬约束**：
 
 - 必须在 `gen_susfs_patch` **之后** —— 否则它的改动会被算进导出的 `susfs.patch`
 - 必须在 `backup_defconfig` **之后** —— 否则 `CONFIG_NOMOUNT` 不会被 bazel fragment 的 diff 捕获

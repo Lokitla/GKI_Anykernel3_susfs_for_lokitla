@@ -95,7 +95,7 @@ jobs:
           sudo apt-get install -y git curl jq
 
       # 读取 config/config 里的自定义提交配置，使管理器的版本选取
-      # 与内核构建使用的 SukiSU 提交保持一致（此前管理器永远跟随最新提交）。
+      # 与内核构建使用相同的 SukiSU 提交。
       - name: 检出本仓库配置
         uses: actions/checkout@v7
         with:
@@ -299,7 +299,7 @@ jobs:
             # GitHub API（commits?sha=main 的 Link rel=last）取提交数的，管理器这边
             # 候选 run 的版本也必须走同一条路。
             #
-            # 原先这里只用 git rev-list --count：KernelSU 是 fetch-depth:1 的浅克隆，
+            # KernelSU 是 fetch-depth:1 的浅克隆，不能用 git rev-list --count，
             # rev-list 的结果取决于本地抓取深度，同一个 commit 两次运行能数出不同值
             # —— 于是同一份脚本，一次严格命中 40922，一次退到 40879，稳定性为零。
             # API 口径既稳定又与内核侧对齐；本地 git 仅作 API 拿不到时的兜底。
@@ -341,7 +341,7 @@ jobs:
             esac
           }
 
-          # [融合] Spoofed（伪装官方 KernelSU 包名）管理器开关
+          # Spoofed（伪装官方 KernelSU 包名）管理器开关
           #   开启：一并拉取 Spoofed-Manager（伪装官方包名的管理器）
           #   关闭：过滤掉所有名字含 spoofed 的产物，只保留普通管理器
           WANT_SPOOFED="${{ inputs.manager_spoofed }}"
@@ -813,6 +813,10 @@ jobs:
 
           curl "${CURL_ARGS[@]}" -H "Authorization: Bearer $GH_TOKEN" \
             -o "$WORKDIR/artifact.zip" "$DOWNLOAD_URL"
+          if ! unzip -tq "$WORKDIR/artifact.zip" >/dev/null; then
+            echo "::error::SUSFS Actions artifact ZIP 校验失败" >&2
+            exit 1
+          fi
           unzip -q "$WORKDIR/artifact.zip" -d "$WORKDIR/extracted"
 
           mkdir -p "$WORKDIR/module"
@@ -824,6 +828,24 @@ jobs:
             (cd "$WORKDIR/extracted" && zip -qr "$WORKDIR/module/ksu_module_susfs.zip" .)
           fi
 
+          MODULE_ZIP_COUNT=0
+          for module_zip in "$WORKDIR/module/"*.zip; do
+            [ -f "$module_zip" ] || continue
+            MODULE_ZIP_COUNT=$((MODULE_ZIP_COUNT + 1))
+            if ! unzip -tq "$module_zip" >/dev/null; then
+              echo "::error::SUSFS 模块 ZIP 校验失败: $(basename "$module_zip")" >&2
+              exit 1
+            fi
+            if ! unzip -Z1 "$module_zip" | grep -Eq '(^|/)module\.prop$'; then
+              echo "::error::SUSFS 模块 ZIP 缺少 module.prop: $(basename "$module_zip")" >&2
+              exit 1
+            fi
+          done
+          if [ "$MODULE_ZIP_COUNT" -eq 0 ]; then
+            echo "::error::整理后没有可用的 SUSFS 模块 ZIP" >&2
+            exit 1
+          fi
+
           rm -rf susfs-module
           mv "$WORKDIR/module" susfs-module
           echo "SUSFS_NAME=$NAME" >> "$GITHUB_ENV"
@@ -833,7 +855,7 @@ jobs:
         if: steps.add_KSU.outcome == 'failure'
         run: echo "下载CI构建的KSU失败!"
 
-      # [融合] 按 APK 路径/文件名是否含 spoofed 分流，
+      # 按 APK 路径/文件名是否含 spoofed 分流，
       # 让普通管理器与 Spoofed（伪装官方包名）管理器成为两个独立产物，
       # 而不是混在一个压缩包里。
       - name: 分流管理器 APK

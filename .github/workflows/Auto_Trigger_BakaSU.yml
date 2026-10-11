@@ -25,7 +25,7 @@
 #           刻意不跑上游那样的 80 个全量：早期子版本（5.10.66/81/101…）实质
 #           已无人使用，编出来只占 Release 体积和 CI 时长。
 #
-#   full —— 手动触发用（直接跑 kernel-*.yml），共 84 个组合，保留全部历史子版本。
+#   full —— 手动触发用（直接跑 kernel-*.yml），共 91 个组合，保留全部历史子版本。
 #           不做删除处理，只是默认不自动跑。
 #
 # 分流靠 kernel-*.yml 的 called_from_main 入参：main.yml 调用时传 true → auto，
@@ -33,7 +33,7 @@
 #
 # 关于 6.12 上的 KPM：
 #   SukiSU 的 drivers/kernelsu/kpm/super_access.c 用了 netlink_kernel_cfg.cb_mutex
-#   与 DYNAMIC_STRUCT_END(netlink_kernel_cfg)，在 6.10+ 上编不过。原先启用 KPM 时
+#   与 DYNAMIC_STRUCT_END(netlink_kernel_cfg)，在 6.10+ 上编不过。启用 KPM 时
 #   第一次构建必失败，要靠 COMPILE_MAX_ATTEMPTS 重试丢掉 ksu.fragment 才出包，
 #   每版多花约 18 分钟；现在早期闸门直接把 KPM_SUPPORTED 置 0 自动关闭。
 #   → KPM 在 6.12 上等于不可用，需要 KPM 只能用 ≤ 6.6 的内核。
@@ -94,7 +94,7 @@ concurrency:
 jobs:
   check-and-trigger:
     runs-on: ubuntu-24.04
-    # [融合] 仓库所有者白名单：fork 后需把自己的用户名加进来，否则自动构建永不触发
+    # 仓库所有者白名单：fork 后需把自己的用户名加进来，否则自动构建永不触发
     if: contains(fromJSON('["zzh20188", "elysias123", "Lokitla"]'), github.repository_owner)
     steps:
       - name: Checkout repository
@@ -226,7 +226,7 @@ jobs:
               ;;
             "全部版本")
               # 完整矩阵走「构建内核」(main.yml)。
-              # 构建目标用逗号分隔字符串 build_targets（原先的 5 个 build_a1x
+              # 构建目标用逗号分隔字符串 build_targets（替代原来的 5 个 build_a1x
               # 布尔开关已合并，以便腾出 25 个 input 名额）：6.12 按需追加，
               # 其余固定，避免 build_all 把 6.12 一起拉进来。
               # 实际组合数由 matrix.json 决定（当前 19 个）。

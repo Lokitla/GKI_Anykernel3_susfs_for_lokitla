@@ -32,20 +32,20 @@ set -eo pipefail
 : "${USE_BBG:=false}"
 : "${USE_KPM:=false}"
 : "${USE_REKERNEL:=false}"
-# [移植] 网络增强：IPSet 全类型 + BBR + FQ/FQ_CODEL 队列 + IPv6 NAT + 附加拥塞算法。
+# 网络增强：IPSet 全类型 + BBR + FQ/FQ_CODEL 队列 + IPv6 NAT + 附加拥塞算法。
 # 全部走 defconfig 写入，不引入第三方代码，默认关闭。
 : "${USE_NET_ENHANCE:=false}"
-# [移植] 兼容跳过：可选功能失败时降级为警告并继续构建，而非中断整个构建。
+# 兼容跳过：可选功能失败时降级为警告并继续构建，而非中断整个构建。
 # 可跳过的阶段由 phase_skippable 白名单控制，SUSFS 与一加 8E 不在其中。
 : "${SKIP_INCOMPATIBLE:=false}"
-# [移植] NoMount 挂载元模块，移植自上游 zzh20188/GKI_KernelSU_SUSFS commit 27e129e
+# NoMount 挂载元模块，移植自上游 zzh20188/GKI_KernelSU_SUSFS commit 27e129e
 # （feat(ci): add optional NoMount metamodule integration，2026-09-19）。
 # NoMount 在 fs/ 下注册子系统，与 SUSFS sus_mount 各走各的路径，可和任意 KSU 变体共存。
 : "${USE_NOMOUNT:=false}"
 : "${CVE_2026_43499_PATCH:=false}"
 : "${EXPORT_SUSFS_PATCHES:=false}"
 : "${ENABLE_SUSFS:=true}"
-# [移植] SUSFS 原始补丁探测（来自上游 zzh20188 的 susfs-probe 工具分支）：
+# SUSFS 原始补丁探测（来自上游 zzh20188 的 susfs-probe 工具分支）：
 #   SUSFS_RAW_PROBE=true  -> 请求"只打原始补丁、不做适配修复"，用于校准兼容线。
 #                            **需要 apply.sh 内部配合**才能生效（见 apply_susfs 阶段）。
 #   SUSFS_SIDE_FIXES=true -> 探测时仍保留与子版本无关的侧修复（5.10 上游补丁
@@ -73,10 +73,8 @@ SUSFS_CONFIG_OPTIONS=(
   CONFIG_KSU_SUSFS_SUS_MAP=y
 )
 : "${SUPP_OP:=false}"
-# P1-2 合规锚点：严格许可模式。设为 true 时，跳过两个「许可未明 / 非标准许可」的
-# 非必需补丁（Numbersf/Action-Build 的 Unicode 绕过修复、WildKernels/kernel_patches
-# 的三星 min_kdp），只构建 GPL 体系内可清晰追溯的产物。
-# 详见 THIRD_PARTY_NOTICES.md。默认 false（保持既有构建行为）。
+# 严格许可模式会跳过许可未明或采用非标准许可的可选补丁。来源和许可信息见
+# THIRD_PARTY_NOTICES.md。默认关闭。
 : "${STRICT_LICENSE_MODE:=false}"
 : "${DROIDSPACES:=不启用}"
 : "${DROIDSPACES_NTSYNC:=false}"
@@ -91,12 +89,12 @@ case "${USE_KPM,,}" in
   *)                   USE_KPM="disabled (关闭)" ;;
 esac
 
-# [融合] KPM 镜像修补工具，移植自 ShirkNeko/GKI_KernelSU_SUSFS (scripts/config.py)
+# KPM 镜像修补工具，移植自 ShirkNeko/GKI_KernelSU_SUSFS (scripts/config.py)
 # ShirkNeko/SukiSU_patch 已改名为 SukiSU-Ultra/SukiSU_patch，旧路径目前靠 301 跳转苟活，
 # 直接指向新名字，免得哪天跳转撤掉就整片构建一起挂。
 # 跟随 SukiSU_patch 上游 main 分支（不钉 commit，便于自动跟进上游）
 : "${KPM_PATCH_URL:=https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux}"
-# P1-A 修复：KPM 修补工具的可选 sha256 锚点。留空则不校验（跟随 main、零锚点风险）；
+# KPM 修补工具的可选 sha256 锚点。留空则不校验（跟随 main、零锚点风险）；
 # 传入具体 64 位 hex 后，下方 stage_patch_kpm 会做 fail-closed 比对，不符即拒绝执行。
 # 入口优先级（高 → 低）：
 #   1) 环境变量 EXPECTED_KPM_PATCH_SHA256（CI: build.yml inputs.kpm_patch_sha256；本地: --kpm-patch-sha256）
@@ -203,7 +201,7 @@ stage_summary() {
   echo "========================================"
 
 
-  # [融合] BBR 开关展示（zzh20188 原摘要没有该项）
+  # BBR 开关展示（zzh20188 原摘要没有该项）
   echo "BBR 拥塞控制: ${USE_BBR}"
 
   cd "$_pwd"
@@ -388,7 +386,7 @@ run_download_toolchain() {
 stage_gen_sign_key() {
   log_stage "gen_sign_key" "生成签名密钥"
   local _pwd="$PWD"
-  # P2-5 修复：复用已有密钥以保证 boot 签名可复现，仅在缺失时生成；公钥归档便于审计
+  # 复用已有密钥以保证 boot 签名可复现，仅在缺失时生成；公钥归档便于审计
   #
   # 注意（可复现性）：该 pem 位于 kernel-build-tools/ 内，会随「缓存工具链」
   # 步骤（actions/cache key: toolchain-${runner.os}-v1）一起被缓存与恢复。
@@ -499,9 +497,7 @@ stage_clone_deps() {
   }
 
   # SUSFS 提交锁定：显式传入的 SUSFS_COMMIT 环境变量优先级最高。
-  # 此前 build.yml 一直在传这个变量，但本脚本从未读取它 —— susfs_commit 因此
-  # 是个空开关（各入口都能填，填了也没人用）。这里补上读取，与 SUKISU_COMMIT
-  # （见 resolve_ksu_branch 附近）保持同一套优先级：显式入参 > config/config > 分支最新。
+  # 优先级：显式入参 > config/config > 分支最新。
   # 老版本变体（SukiSU(40726)/SukiSU(40548)）走各自的固定配置，不受此开关影响。
   if [ -n "${SUSFS_COMMIT:-}" ] && [ -z "$LEGACY_SUKISU_CONFIG" ]; then
     if [[ ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{40}$ && ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{64}$ ]]; then
@@ -548,10 +544,8 @@ stage_sync_kernel_source() {
   local _pwd="$PWD"
   cd ${KERNEL_ROOT}
   FORMATTED_BRANCH="${ANDROID_VERSION}-${KERNEL_VERSION}-${OS_PATCH_LEVEL}"
-  # P1-4 调研结论（2026-09）：AOSP common 内核确有 -lts 后缀分支（如 android14-6.1-lts，
-  # 由 android14-6.1 定期合并上游 LTS 而来），当前 FORMATTED_BRANCH 拼接正确，LTS 可正常 sync。
-  # 故 sync 无需特判/映射，保留现有逻辑。
-  # P2-8：LTS 时 SUB_LEVEL 为字面量 X，此处从 data json 解析真实 lts 版本号替换之，
+  # AOSP common 提供带 -lts 后缀的分支（如 android14-6.1-lts），可按常规分支名同步。
+  # LTS 时 SUB_LEVEL 为字面量 X，此处从 data json 解析真实 lts 版本号替换之，
   # 使产物名（如 android14-6.1.177-lts-AnyKernel3.zip）可读可分发。
   if [ "${OS_PATCH_LEVEL}" = "lts" ]; then
     LTS_JSON="$WORKSPACE/data/${ANDROID_VERSION}/${KERNEL_VERSION}.json"
@@ -614,10 +608,16 @@ except Exception:
       # Google 会把过期的月度分支整个删掉（既不在活跃也不在 deprecated/ 下），
       # 但 manifest 仍指向该分支。发布 tag 不会被删，回退到编号最大的 _rN tag。
       # 必须写成 refs/tags/ 全路径，裸 tag 名会被 repo 当成分支去 refs/heads/ 下找。
-      local latest_tag
-      latest_tag=$(git ls-remote https://android.googlesource.com/kernel/common "refs/tags/${FORMATTED_BRANCH}_r*" 2>/dev/null \
-        | awk '{print $2}' | grep -v '\^{}$' | sed 's|refs/tags/||' \
-        | awk -F'_r' '{print $NF+0, $0}' | sort -n | tail -n 1 | cut -d' ' -f2- || true)
+      local latest_tag tag_query rc
+      if tag_query=$(git ls-remote https://android.googlesource.com/kernel/common "refs/tags/${FORMATTED_BRANCH}_r*" 2>&1); then
+        latest_tag=$(printf '%s\n' "$tag_query" \
+          | awk '{print $2}' | grep -v '\^{}$' | sed 's|refs/tags/||' \
+          | awk -F'_r' '$NF ~ /^[0-9]+$/ {print $NF+0, $0}' | sort -n | tail -n 1 | cut -d' ' -f2-)
+      else
+        rc=$?
+        echo "::error::查询 ${FORMATTED_BRANCH} 发布 tag 失败（git ls-remote 退出码 $rc）: $tag_query"
+        return "$rc"
+      fi
       if [ -z "$latest_tag" ]; then
         echo "::error::分支 ${FORMATTED_BRANCH} 在上游既无分支也无发布 tag"
         return 1
@@ -833,17 +833,13 @@ stage_add_oneplus8e() {
   cd ${KERNEL_ROOT}/common/drivers
 
   # 优先用仓库里随版本固定的副本（hmbird_patch.c）。
-  # 原先每次构建都直取 zzh20188 的 dev 分支：一来 dev 随时会变，抓回来的代码可能
-  # 与本仓库其他部分对不上，属于把构建稳定性交给了别人的开发分支；
-  # 二来每个任务都打一次上游 raw 接口，纯属无谓请求。
-  # 本地副本缺失时才回退到远程，且加 -f 让下载失败显式报错，而不是留下一个空文件。
+  # 优先使用仓库内的固定副本，缺失时再从上游下载并校验。
   if [ -f "${WORKSPACE}/hmbird_patch.c" ]; then
     echo "使用仓库内的 hmbird_patch.c"
     cp "${WORKSPACE}/hmbird_patch.c" ./hmbird_patch.c
   else
     echo "仓库内无副本，从上游获取 hmbird_patch.c..."
-    # 这段代码会被编进内核。此前只判 curl 退出码，拿回 HTML 错误页会照样写进
-    # 源码树，构建到一半才以奇怪的编译错误暴露。按 C 源码特征校验后再使用。
+    # 该文件会参与内核编译，下载后先校验 C 源码特征。
     if ! fetch_remote_script \
         "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c" \
         hmbird_patch.c "hmbird_patch.c" \
@@ -1041,7 +1037,7 @@ stage_resolve_ksu_branch() {
 
   # BRANCH 为纯 ref（分支名或 commit hash），不再带 "-s" 前缀。
   # SukiSU/KernelSU 官方/BakaSU 的 setup.sh 用法是 `setup.sh [--cleanup | <commit-or-tag>]`，
-  # 即 ref 作为位置参数传入。此前写成 "bash setup.sh -s builtin" 会把 "-s" 本身当作
+  # 将 ref 作为位置参数传入，避免把选项误作分支名。
   # 位置参数，git checkout "-s builtin" 报 unknown switch 后静默回退默认分支，
   # 导致"说要 builtin 实际编了 main"。调用侧统一改回 `bash -s "$BRANCH"`。
   export BRANCH="$BRANCH"
@@ -1065,8 +1061,7 @@ run_resolve_ksu_branch() {
 # 被劫持的空壳、截断的半截文件都能以 200 返回。这里要求「非空 + 可读 + 含
 # shell 脚本痕迹」，不满足即拒绝（fail-closed），避免把来路不明的内容交给 bash。
 #
-# 提升到文件作用域：此前它嵌套在 stage_add_kernelsu 内部，导致 add_bbg 等
-# 同样"下载即执行"的阶段够不着，只能各自实现一份没有校验的弱化版。
+# 供 KernelSU、BBG 等需要下载并执行 setup 脚本的阶段共用。
 #
 # 用法: fetch_remote_script <url> <输出路径> <标签> [特征正则] [wget]
 #   特征正则默认匹配 shell/KernelSU/setup 字样；调用方应按被下载脚本的
@@ -1109,7 +1104,7 @@ stage_add_kernelsu() {
   log_stage "add_kernelsu" "添加 KernelSU"
   local _pwd="$PWD"
   cd ${KERNEL_ROOT}
-  # P2-9 修复：上游 setup.sh 下载后先做内容校验再执行（供应链风险兜底）。
+  # 上游 setup.sh 下载后先做内容校验再执行（供应链风险兜底）。
   fetch_ksu_setup() {
     fetch_remote_script "$1" /tmp/ksu_setup.sh "$2" \
       '(^|[[:space:]])sh[[:space:]]|#!/|KernelSU|setup' || return 1
@@ -1118,7 +1113,7 @@ stage_add_kernelsu() {
   case "${KSU_VARIANT}" in
     "Official")
       echo "添加 KernelSU 官方版..."
-      # P1-2 修复：下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
+      # 下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
       KSU_SETUP="https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh"
       fetch_ksu_setup "$KSU_SETUP" "KernelSU 官方" || return 1
       bash -s "$BRANCH" < /tmp/ksu_setup.sh || { echo "::error::KernelSU 官方 setup.sh 执行失败"; return 1; }
@@ -1135,14 +1130,14 @@ stage_add_kernelsu() {
       ;;
     "Next")
       echo "添加 KernelSU-Next..."
-      # P1-2 修复：下载后显式校验再执行（不钉 commit，跟随上游 dev 分支）
+      # 下载后显式校验再执行（不钉 commit，跟随上游 dev 分支）
       KSU_SETUP="https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh"
       fetch_ksu_setup "$KSU_SETUP" "KernelSU-Next" || return 1
       bash -s "$BRANCH" < /tmp/ksu_setup.sh || { echo "::error::KernelSU-Next setup.sh 执行失败"; return 1; }
       ;;
     "SukiSU")
       echo "添加 ${KSU_VARIANT}..."
-      # P1-2 修复：下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
+      # 下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
       KSU_SETUP="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
       fetch_ksu_setup "$KSU_SETUP" "SukiSU" || return 1
       bash -s "$BRANCH" < /tmp/ksu_setup.sh || { echo "::error::SukiSU setup.sh 执行失败"; return 1; }
@@ -1161,8 +1156,7 @@ stage_add_kernelsu() {
       #   KSU_VERSION := $(VERSION_BASE + LOCAL_COUNT - VERSION_OFFSET)
       # 所以我们只做校验与兜底，不再自行改写版本号。
       #
-      # 注意 builtin 没有 kernel/Kbuild（版本定义在 kernel/Makefile），此前那段
-      # `sed -i ... kernel/Kbuild` 在 builtin 上是静默空操作，属于假装成功的无效步骤。
+      # builtin 的版本定义位于 kernel/Makefile，不在 kernel/Kbuild。
       if [ -d "KernelSU/.git" ]; then
         KSU_VERSION=$(resolve_sukisu_version) || {
           echo "::error::SukiSU 版本号解析失败"; return 1;
@@ -1183,7 +1177,7 @@ stage_add_kernelsu() {
       ;;
     "BakaSU")
       echo "添加 BakaSU..."
-      # P1-2 修复：下载后显式校验再执行（默认跟随上游 main 分支）
+      # 下载后显式校验再执行（默认跟随上游 main 分支）
       KSU_SETUP="https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh"
       fetch_ksu_setup "$KSU_SETUP" "BakaSU" || return 1
       bash -s "$BRANCH" < /tmp/ksu_setup.sh || { echo "::error::BakaSU setup.sh 执行失败"; return 1; }
@@ -1212,7 +1206,7 @@ stage_add_kernelsu() {
         exit 1
       fi
       echo "添加 ${KSU_VARIANT}..."
-      # P1-2 修复：下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
+      # 下载后显式校验再执行（不钉 commit，跟随上游 main 分支）
       KSU_SETUP="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
       fetch_ksu_setup "$KSU_SETUP" "SukiSU" || return 1
       bash -s "$BRANCH" < /tmp/ksu_setup.sh || { echo "::error::SukiSU setup.sh 执行失败"; return 1; }
@@ -1220,10 +1214,7 @@ stage_add_kernelsu() {
   esac
 
   # setup.sh 内部是 `git checkout "$1" ... || echo "[-] Checkout default branch"`：
-  # 只要 ref 不存在（或像此前那样把 "-s builtin" 整个当 ref 传进去），切分支失败会被
-  # 这句静默吞掉，脚本照常收尾"成功"，实际却停在默认分支——此前"声称 builtin、
-  # 实际编的是 main"，SELinux 隐藏因此互相踩踏失效，就是被这一句藏住的。
-  # 所以这里复核 KernelSU 真实位置，对不上立刻终止。
+  # 复核 KernelSU 实际分支或提交；与预期不符时终止构建。
   KSU_EXPECT_REF="${KSU_COMMIT:-$BRANCH}"
   if [ -d "KernelSU/.git" ] && [ -n "$KSU_EXPECT_REF" ]; then
     KSU_ACTUAL_BRANCH=$(git -C KernelSU rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -1263,8 +1254,7 @@ stage_add_kernelsu() {
   fi
 
   # KPM 是 SukiSU-Ultra 独有的模块加载功能，KernelSU 官方 / BakaSU / KernelSU-Next
-  # 都没移植（它们的 Kconfig 里没有 `config KPM`）。此前这个组合要到 config_kernel
-  # 阶段才报错，而那时克隆、打补丁、写 defconfig 全都跑完了——一次白等十几分钟。
+  # 均未提供 KPM Kconfig。提前检查，避免源码准备完成后才发现该组合不受支持。
   # 这里在 KernelSU 源码就位后立刻查。
   #
   # 要区分两种「没有 KPM」：
@@ -1321,7 +1311,7 @@ stage_add_kernelsu() {
     export KSU_LATEST_COMMIT_DATE="未知"
   fi
 
-  # P2-12 修复：清理下载到 /tmp 的 setup 脚本，避免跨任务 /tmp 竞态（同路径重复写入）
+  # 清理下载到 /tmp 的 setup 脚本，避免跨任务 /tmp 竞态（同路径重复写入）
   rm -f /tmp/ksu_setup.sh
 
   cd "$_pwd"
@@ -1399,10 +1389,7 @@ stage_config_sukisu_manager() {
     VERSION_TEMPLATE="v\$1-$GIT_HASH@$BRANCH_NAME"
   fi
 
-  # Kbuild 里找不到 define get_ksu_version_full 时 awk 会以 1 退出；此前写作
-  # `awk ... && mv ...`，在 set -e 下会直接把整个构建判失败——但版本标识只是
-  # 展示用的字符串，上游一旦改名就全片 SukiSU 构建挂掉，代价完全不成比例。
-  # 改为降级告警：定制不了就跳过，内核照常产出。
+  # 版本标识仅用于展示。若上游没有对应定义，发出告警并继续构建。
   if ! awk -v body="$VERSION_TEMPLATE" '
     BEGIN {
       in_block = 0
@@ -1457,7 +1444,7 @@ stage_susfs_baseline() {
   # 排除 .rej/.orig 和补丁文件本身：apply.sh 会把 SUSFS 补丁拷进 common/ 并留下 .rej
   # 从真实索引复制一份再 add，只需哈希变动文件，避免对整棵内核树重新哈希
   cp "$(git rev-parse --git-path index)" /tmp/susfs-base.idx
-  # P1-3：GIT_INDEX_FILE 一旦导出就会污染本进程后续所有 git 调用（包括横跨其间的
+  # GIT_INDEX_FILE 一旦导出就会污染本进程后续所有 git 调用（包括横跨其间的
   # apply_susfs 阶段）。这里只在 write-tree 这一条命令上生效，用完立刻撤销。
   GIT_INDEX_FILE=/tmp/susfs-base.idx git add -A -- . ':!*.rej' ':!*.orig' ':!*.patch'
   SUSFS_BASE_TREE=$(GIT_INDEX_FILE=/tmp/susfs-base.idx git write-tree)
@@ -1629,7 +1616,17 @@ stage_gen_susfs_patch() {
     susfs_commit=$(git -C "$SUSFS4KSU" rev-parse HEAD)
 
     local rej_count patch_sha256
-    rej_count=$(find . -type f -name '*.rej' | wc -l)
+    # 与冲突收集阶段使用同一过滤规则：上游跟踪且未修改的 .rej 不算本次补丁拒绝。
+    mapfile -t SUSFS_REJ_FILES < <(
+      find . -type f -name '*.rej' | sort | while IFS= read -r rej; do
+        if git -C "$(dirname "$rej")" ls-files --error-unmatch -- "$(basename "$rej")" >/dev/null 2>&1 \
+          && git -C "$(dirname "$rej")" diff --quiet -- "$(basename "$rej")" 2>/dev/null; then
+          continue
+        fi
+        printf '%s\n' "$rej"
+      done
+    )
+    rej_count=${#SUSFS_REJ_FILES[@]}
     patch_sha256=$(sha256sum "$OUT_DIR/susfs.patch" | awk '{print $1}')
 
     jq -n \
@@ -1653,7 +1650,7 @@ stage_gen_susfs_patch() {
       --arg run_id "$GITHUB_RUN_ID" \
       '$ARGS.named' > "$OUT_DIR/manifest.json" || return 1
 
-    echo "补丁大小: $(du -h "$OUT_DIR/susfs.patch" | cut -f1)，.rej 数量: $rej_count"
+    echo "补丁大小: $(du -h "$OUT_DIR/susfs.patch" | cut -f1)，本项目补丁拒绝数: $rej_count"
     cat "$OUT_DIR/manifest.json"
   }
 
@@ -1703,7 +1700,7 @@ stage_backup_defconfig() {
 run_backup_defconfig() { stage_backup_defconfig "$@"; }
 
 # ---------------------------- NoMount 集成 ----------------------------
-# [移植] 来源：上游 commit 27e129e（feat(ci): add optional NoMount metamodule integration）。
+# 来源：上游 commit 27e129e（feat(ci): add optional NoMount metamodule integration）。
 #
 # 位置不能挪动，上游注释给了两条硬约束：
 #   1. 必须在「生成 SUSFS 集成补丁」(gen_susfs_patch) 之后 ——
@@ -1947,8 +1944,7 @@ stage_inject_ntsync() {
   esac
 
   echo "自动选择 NTSync 补丁: ${NTSYNC_PATCH}.patch"
-  # 这两个补丁直接 `patch -p1` 进内核源码树，来路必须校验。此前只用 wget 的
-  # 退出码判断成功与否 —— raw.githubusercontent.com 出错时返回的是 HTML 错误页，
+  # 这两个补丁会直接应用到内核源码树，下载后先校验内容。
   # wget 仍以 0 落盘，随后交给 patch 去解析。统一走 fetch_remote_script，
   # 按 unified diff 的实际特征校验（diff --git / --- a/ / +++ b/ / @@ 块头）。
   local NTSYNC_RE='^(diff --git |--- a/|\+\+\+ b/|@@ )'
@@ -1961,7 +1957,7 @@ stage_inject_ntsync() {
     "${NTSYNC_PATCH}.patch" "${NTSYNC_PATCH}.patch" "$NTSYNC_RE" true \
     || { echo "::error::下载或校验 ${NTSYNC_PATCH}.patch 失败"; exit 1; }
 
-  # P2-2 修复：补丁来自未钉版本的 main 分支，下载/应用失败必须显式报错而非静默跳过
+  # 补丁来自未钉版本的 main 分支，下载/应用失败必须显式报错而非静默跳过
   patch -p1 --forward < "ntsync_base.patch" || { echo "::error::应用 ntsync_base.patch 失败"; exit 1; }
   patch -p1 --forward < "${NTSYNC_PATCH}.patch" || { echo "::error::应用 ${NTSYNC_PATCH}.patch 失败"; exit 1; }
 
@@ -1996,7 +1992,7 @@ run_inject_ntsync() {
 
 stage_apply_unicode_fix() {
   log_stage "apply_unicode_fix" "应用 Unicode 绕过修复"
-  # P1-2：该补丁来自 Numbersf/Action-Build（自定义许可，非 GPL 体系）。
+  # 该补丁来自 Numbersf/Action-Build（自定义许可，非 GPL 体系）。
   # 严格许可模式下整个跳过，产物中不含该来源代码，代价是 SUSFS 的 Unicode 绕过
   # 修复不生效（内核本身仍可正常构建与启动）。
   if [ "${STRICT_LICENSE_MODE:-false}" = "true" ]; then
@@ -2072,46 +2068,63 @@ stage_setup_zram_lz4() {
   fi
 
   # ---------- lz4k / lz4kd 补丁栈 ----------
-  # 这一段依赖 SukiSU_patch 按内核版本提供的 lz4kd.patch + lz4k_oplus.patch，
-  # 目前上游只有 5.10 / 5.15 / 6.1 / 6.6 四个目录，6.12 没有对应的。
-  #
-  # 原先这里无条件 cp + patch：6.12 上 cp 找不到源目录直接失败，patch 连输入
-  # 文件都不存在，两条失败都被 `if ! patch` 吞成一条 warning；真正的错误直到
-  # defconfig 校验才以 `CONFIG_CRYPTO_LZ4K: actual '', expected 'y'` 炸出来，
-  # 而那 5 个 CONFIG_CRYPTO_* 全由 lz4k 补丁提供，未打补丁的树上压根不存在 ——
-  # 报错位置离出错点十万八千里。这里改成先查上游有没有，没有就整段跳过。
+  # 5.10 / 5.15 / 6.1 / 6.6 优先使用 SukiSU_patch 提供的版本补丁；
+  # 6.12 的补丁随本仓库维护在 zram_patch/6.12，作为本地补丁来源优先选择。
   #
   # 结论写进 ZRAM_LZ4K_OK（全局，供 config_zram 复用），免得「打没打补丁」
   # 这件事在两处各判断一遍、漏掉其中一处。
   ZRAM_LZ4K_OK=0
-  if [ -d "${SUKISU_PATCHES}/other/zram/zram_patch/${KERNEL_VERSION}" ]; then
+  local lz4kd_patch lz4k_oplus_patch
+  lz4kd_patch=$(zram_patch_file lz4kd.patch)
+  lz4k_oplus_patch=$(zram_patch_file lz4k_oplus.patch)
+  if zram_lz4k_available; then
     ZRAM_LZ4K_OK=1
     cp -r $SUKISU_PATCHES/other/zram/lz4k/include/linux/* ./include/linux/
     cp -r $SUKISU_PATCHES/other/zram/lz4k/lib/* ./lib/
     cp -r $SUKISU_PATCHES/other/zram/lz4k/crypto/* ./crypto/
     cp -r $SUKISU_PATCHES/other/zram/lz4k_oplus ./lib/
 
-    cp $SUKISU_PATCHES/other/zram/zram_patch/${KERNEL_VERSION}/lz4kd.patch ./
+    cp "$lz4kd_patch" ./lz4kd.patch
     if ! patch -p1 -F 3 < lz4kd.patch; then
       echo "::warning::lz4kd.patch 应用失败，可能已应用或上下文不匹配"
     fi
 
-    cp $SUKISU_PATCHES/other/zram/zram_patch/${KERNEL_VERSION}/lz4k_oplus.patch ./
+    cp "$lz4k_oplus_patch" ./lz4k_oplus.patch
     if ! patch -p1 -F 3 < lz4k_oplus.patch; then
       echo "::warning::lz4k_oplus.patch 应用失败，可能已应用或上下文不匹配"
     fi
   else
     # 正常路径在 run_setup_zram_lz4 就已经整段跳过，这里只对单独 --only 跑本阶段的情况兜底。
     ZRAM_LZ4K_OK=0
-    echo "::warning::内核 ${KERNEL_VERSION} 无上游 lz4k 补丁栈，跳过 lz4k / lz4kd / lz4k_oplus 补丁"
+    echo "::warning::内核 ${KERNEL_VERSION} 缺少完整 lz4k 补丁栈或源码资源，跳过 lz4k / lz4kd / lz4k_oplus 补丁"
   fi
 
   cd "$_pwd"
 }
 
-# 上游 SukiSU_patch 是否为这个内核版本提供了 lz4k / lz4kd 补丁栈
+# 本仓库补丁优先，SukiSU_patch 作为回退来源。
+zram_patch_file() {
+  local name="$1"
+  local local_patch="$ZZH_PATCHES/zram_patch/${KERNEL_VERSION}/${name}"
+  local upstream_patch="$SUKISU_PATCHES/other/zram/zram_patch/${KERNEL_VERSION}/${name}"
+  if [ -f "$local_patch" ]; then
+    printf '%s\n' "$local_patch"
+  elif [ -f "$upstream_patch" ]; then
+    printf '%s\n' "$upstream_patch"
+  fi
+}
+
+# 两个版本补丁和其余 lz4k 源码资源都齐备时才启用，避免构建到 defconfig 才失败。
 zram_lz4k_available() {
-  [ -d "${SUKISU_PATCHES}/other/zram/zram_patch/${KERNEL_VERSION}" ]
+  [ -n "$(zram_patch_file lz4kd.patch)" ] \
+    && [ -n "$(zram_patch_file lz4k_oplus.patch)" ] \
+    && [ -d "$ZZH_PATCHES/zram/lz4" ] \
+    && [ -d "$ZZH_PATCHES/zram/include/linux" ] \
+    && [ -f "$ZZH_PATCHES/zram/apply_lz4_neon.sh" ] \
+    && [ -d "${SUKISU_PATCHES}/other/zram/lz4k/include/linux" ] \
+    && [ -d "${SUKISU_PATCHES}/other/zram/lz4k/lib" ] \
+    && [ -d "${SUKISU_PATCHES}/other/zram/lz4k/crypto" ] \
+    && [ -d "${SUKISU_PATCHES}/other/zram/lz4k_oplus" ]
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2120,14 +2133,10 @@ run_setup_zram_lz4() {
     echo "跳过阶段: setup_zram_lz4（条件不满足）"
     return 0
   fi
-  # 这个内核版本没有上游 lz4k 补丁栈时整段跳过，而不是"打个折继续"。
-  # 上游只提供 5.10 / 5.15 / 6.1 / 6.6，6.12 不在其中：硬跑下去 cp 找不到源目录、
-  # patch 连输入文件都没有，失败被 `if ! patch` 吞成 warning，真正的错误拖到 defconfig
-  # 校验才以 `CONFIG_CRYPTO_LZ4K: actual '', expected 'y'` 炸出来。装半成品的 ZRAM
-  # 同样要踩那个校验，所以不如一开始就别开。
+  # 补丁或配套源码资源不完整时整段跳过，避免生成无法通过 defconfig 校验的半成品。
   if ! zram_lz4k_available; then
     ZRAM_LZ4K_OK=0
-    echo "::warning::内核 ${KERNEL_VERSION} 无上游 lz4k 补丁栈（SukiSU_patch 只提供 5.10 / 5.15 / 6.1 / 6.6）"
+    echo "::warning::内核 ${KERNEL_VERSION} 没有找到完整 lz4k 补丁栈（本仓库补丁优先，SukiSU_patch 回退）或配套源码"
     echo "::warning::本次已按 USE_ZRAM=${USE_ZRAM} 请求 ZRAM，但整段跳过：补丁栈缺失，ZRAM 相关阶段与 defconfig 配置全部不写入"
     return 0
   fi
@@ -2157,7 +2166,7 @@ stage_fix_66_wifi_bt() {
   MIN_KDP_PATCH="$KERNEL_PATCHES/samsung/min_kdp/add-min_kdp-symbols.patch"
   MIN_KDP_DST="drivers/min_kdp.c"
 
-  # P1-2：min_kdp.c 与三星符号来自 WildKernels/kernel_patches（上游未声明许可），
+  # min_kdp.c 与三星符号来自 WildKernels/kernel_patches（上游未声明许可），
   # 严格许可模式下整体跳过，只保留小米侧符号（不引入未声明许可的代码）。
   # 代价：三星机型的 WiFi/蓝牙兼容性修复不生效。
   if [ "${STRICT_LICENSE_MODE:-false}" = "true" ]; then
@@ -2230,8 +2239,7 @@ EOF
   fi
 
   # ZRAM / ZSMALLOC 被编进内核（=y）时，modules.bzl 里不能再留它们的 .ko 条目，
-  # 否则模块清单检查会为找不到的产物报错。原先只覆盖 android14 / android15，
-  # android16（6.12）漏了 —— 那里的 ZRAM 同样会被上面的 sed 改成 =y。
+  # 否则模块清单检查会为找不到的产物报错；Android 16 的 ZRAM 也会被设为内建。
   if grep -q "^CONFIG_ZRAM=y" "$CONFIG_FILE" \
      || [ "${ANDROID_VERSION}" = "android14" ] || [ "${ANDROID_VERSION}" = "android15" ]; then
     sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$KERNEL_ROOT/common/modules.bzl"
@@ -2275,11 +2283,8 @@ stage_add_bbg() {
   log_stage "add_bbg" "添加 BBG 防格机补丁"
   local _pwd="$PWD"
   cd ${KERNEL_ROOT}
-  # P2-10 修复：下载/执行失败必须显式报错；Kconfig 修改前备份，失败/未命中即回滚提示
-  # 本轮修复：原先只做 wget 成功与否的判断就直接 `bash` —— 与 add_kernelsu 的
-  # fetch_ksu_setup 相比少了一层内容校验。BBG setup.sh 是要进内核源码树的补丁脚本，
-  # 拿到 CDN 错误页同样会以退出码 0 落盘，随后 bash 执行的是 HTML。统一走
-  # fetch_remote_script，按 BBG 自身内容特征校验（而非 KernelSU 特征）。
+  # 下载/执行失败必须显式报错；Kconfig 修改前备份，失败/未命中即回滚提示
+  # BBG setup.sh 会修改内核源码树，下载后按脚本内容特征校验再执行。
   BBG_SETUP="https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh"
   if ! fetch_remote_script "$BBG_SETUP" /tmp/bbg_setup.sh "BBG" \
       'CONFIG_BBG|baseband|Baseband|^#!|^[[:space:]]*(set|function|if|for|KERNEL_ROOT)' true; then
@@ -2470,8 +2475,7 @@ EOF
   fi
 
   # CONFIG_KPM=y 只在变体确实提供 KPM 时才写。KPM_SUPPORTED 由 stage_add_kernelsu
-  # 在源码就位后算好（那里已经对不支持的变体打过警告）。此前这里对 BakaSU / Next
-  # 一律 exit 1，与上一处重复拦一道，且把默认链路整个堵死。
+  # 在源码就位后计算；不支持 KPM 的变体已在前序阶段发出警告。
   if [ "${KSU_MODE}" != "禁用KSU" ] \
      && { [ "${KSU_VARIANT}" == "SukiSU" ] || [ "${KSU_VARIANT}" == "SukiSU(40726)" ] || [ "${KSU_VARIANT}" == "SukiSU(40548)" ] || [ "${KSU_VARIANT}" == "BakaSU" ] || [ "${KSU_VARIANT}" == "Next" ]; }; then
     if { [[ "${USE_KPM}" == enabled* ]] || [[ "${USE_KPM}" == patched* ]]; } && [ "${KPM_SUPPORTED:-1}" = "1" ]; then
@@ -2566,7 +2570,7 @@ PY
     done
   fi
 
-  # [融合] BBR 拥塞控制 —— 取自 ShirkNeko/GKI_KernelSU_SUSFS
+  # BBR 拥塞控制 —— 取自 ShirkNeko/GKI_KernelSU_SUSFS
   #
   # 门控必须先于开关：net/ipv4/Kconfig 里 TCP_CONG_BBR 与 DEFAULT_BBR 都写在
   # `if TCP_CONG_ADVANCED` 块内，门控不成立时这两个符号会被 Kconfig 屏蔽、
@@ -2641,8 +2645,8 @@ run_config_susfs() {
 stage_config_kernel_name() {
   log_stage "config_kernel_name" "配置内核名称"
   local _pwd="$PWD"
-  # P1-1 修复：VERSION 会被直接内插进 perl/sed 程序文本，必须先白名单校验，
-  # 否则含 ' " | $ / 等字符可逃逸引号执行任意命令（与已修 P0-1 同类注入面）。
+  # VERSION 会被直接内插进 perl/sed 程序文本，必须先白名单校验，
+  # 否则含 ' " | $ / 等字符可逃逸引号并执行命令。
   # 校验提前到 cd 之前，失败即返回，不污染后续阶段的 cwd。
   local VERSION_INPUT
   VERSION_INPUT=$(echo "${VERSION:-}" | tr -d '[:space:]')
@@ -2695,7 +2699,7 @@ run_config_kernel_name() { stage_config_kernel_name "$@"; }
 stage_set_build_time() {
   log_stage "set_build_time" "设置自定义构建时间"
   local _pwd="$PWD"
-  # P2-3 修复：原函数内 `set -euo pipefail` 的 -u 会泄漏到后续所有阶段
+  # 原函数内 `set -euo pipefail` 的 -u 会泄漏到后续所有阶段
   # （函数不创建子 shell），导致任一未绑定变量在编译后阶段莫名失败。
   # 改为与脚本顶层一致的 -eo pipefail，去掉 -u。
   set -eo pipefail
@@ -2786,7 +2790,7 @@ compile_kernel_once() {
         find "$KERNEL_ROOT/out" -maxdepth 3 -name Image -o -maxdepth 3 -name Image.lz4 2>/dev/null | head
         exit 1
       }
-      # P1-5 修复：strings|grep 原本是阶段末条命令，在 set -ex 下若镜像中恰好
+      # strings|grep 原本是阶段末条命令，在 set -ex 下若镜像中恰好
       # 不含连续字符串 'Linux version'（极少见，如镜像被定制），grep 返回 1 会令
       # 整个阶段被判失败 → 误报构建失败。改为显式校验，成功判定仍交给 build.sh 退出码。
       if strings "out/${ANDROID_VERSION}-${KERNEL_VERSION}/dist/Image" | grep -q 'Linux version'; then
@@ -2811,7 +2815,7 @@ compile_kernel_once() {
         LTO_FLAG="--lto=none"
       fi
       tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
-      # P1-5 修复：同上，strings|grep 不当成功闸门，改为显式校验不误报。
+      # 同上，strings|grep 不当成功闸门，改为显式校验不误报。
       if strings ./bazel-bin/common/kernel_aarch64/Image | grep -q 'Linux version'; then
         echo "内核版本字符串校验通过"
       else
@@ -2848,8 +2852,7 @@ stage_compile_kernel() {
     fi
     attempt=$((attempt + 1))
   done
-  # 导出给 collect_fail_log 写进 summary.txt（此前这两个变量从未赋值，
-  # 日志里永远显示「未知」）
+  # 供 collect_fail_log 写入 summary.txt。
   export COMPILE_ATTEMPTS=$(( attempt > COMPILE_MAX_ATTEMPTS ? COMPILE_MAX_ATTEMPTS : attempt ))
   export COMPILE_EXIT_CODE=$rc
   if [ "$rc" -ne 0 ]; then export COMPILE_FAILED=1; fi
@@ -2899,7 +2902,7 @@ stage_patch_kpm_image() {
   log_stage "patch_kpm_image" "修补 Image（KPM）"
   local _pwd="$PWD"
 
-  # [融合] 移植自 ShirkNeko/GKI_KernelSU_SUSFS 的 patch_kpm_image()
+  # 移植自 ShirkNeko/GKI_KernelSU_SUSFS 的 patch_kpm_image()
   # 用 SukiSU_patch 的 kpm/patch_linux 对编译产物 Image 打补丁，使其具备加载
   # KPM 模块的能力。仅在开启 KPM 且非 6.6 内核时执行。
   case "${USE_KPM}" in
@@ -2927,7 +2930,7 @@ stage_patch_kpm_image() {
     return 0
   fi
 
-  # P1-2：patch_linux 来自 SukiSU-Ultra/SukiSU_patch（上游未声明许可）。
+  # patch_linux 来自 SukiSU-Ultra/SukiSU_patch（上游未声明许可）。
   # 严格许可模式下不使用该工具，保留未修补的原始 Image（KPM 模块加载能力不生效）。
   if [ "${STRICT_LICENSE_MODE:-false}" = "true" ]; then
     echo "跳过 KPM 镜像修补（STRICT_LICENSE_MODE=true：排除 SukiSU_patch 未声明许可的 patch_linux）"
@@ -2970,7 +2973,7 @@ stage_patch_kpm_image() {
     echo "::warning::未配置 KPM 修补工具 sha256 锚点（EXPECTED_KPM_PATCH_SHA256 与 config/kpm_patch_sha256 均为空），本次为零锚点运行：上游变更无法被察觉。可用 scripts/tools/pin_kpm_patch.sh 生成锚点。"
   fi
 
-  # P1-2 修复：下载后显式校验，chmod 755（原 777 过度放权），可选 sha256 比对
+  # 下载后显式校验，chmod 755（原 777 过度放权），可选 sha256 比对
   if ! curl -LSsf "$KPM_PATCH_URL" -o patch; then
     echo "::warning::下载 KPM 修补工具失败，跳过（不影响其余产物）"
   else
@@ -3016,7 +3019,7 @@ stage_patch_kpm_image() {
 run_patch_kpm_image() { stage_patch_kpm_image "$@"; }
 
 # ---------------------------------------------------------------------------
-# A-2 / B-1：按最终 Image 重建 Image.lz4
+# 按最终 Image 重建 Image.lz4。
 #
 # 背景：KPM 镜像修补会 `mv oImage Image` 替换掉最终 Image，但同目录的 Image.lz4
 # 仍是旧 Image 的压缩结果。boot-lz4.img 直接拿它打包 → 刷进手机的是未打补丁的内核。
@@ -3269,7 +3272,7 @@ stage_prepare_anykernel3() {
   local _pwd="$PWD"
   mv ./Image "$ANYKERNEL3/Image"
 
-  # A-1：make_anykernel3 只在「上传全部」模式下执行，而本阶段只在非「上传全部」
+  # make_anykernel3 只在「上传全部」模式下执行，而本阶段只在非「上传全部」
   # 模式下执行，两者条件互斥 —— 非「上传全部」时 Image 被搬进 AnyKernel3 目录
   # 却没有任何一步打包，结果是一个刷机包都不产出。这里补上打包。
   local _zip
@@ -3336,7 +3339,7 @@ stage_build_boot_a12() {
 
 # 条件执行（等价原工作流 if:）
 run_build_boot_a12() {
-  # P2-4 修复：「仅 AnyKernel3」模式用户只拿刷机包，boot 镜像编译纯属浪费 runner，
+  # 「仅 AnyKernel3」模式用户只拿刷机包，boot 镜像编译纯属浪费 runner，
   # 且上传步骤本就不收集非「上传全部」模式的 *.img，这里在阶段层直接跳过。
   if [ "$ANDROID_VERSION" = "android12" ] && [ "$ARTIFACT_UPLOAD_MODE" = "上传全部" ]; then
     stage_build_boot_a12 "$@"
@@ -3373,7 +3376,7 @@ stage_build_boot_a13plus() {
 
 # 条件执行（等价原工作流 if:）
 run_build_boot_a13plus() {
-  # P2-4 修复：同上，仅「上传全部」模式才构建 boot 镜像
+  # 同上，仅「上传全部」模式才构建 boot 镜像
   if { [ "$ANDROID_VERSION" = "android13" ] || [ "$ANDROID_VERSION" = "android14" ] || [ "$ANDROID_VERSION" = "android15" ] || [ "$ANDROID_VERSION" = "android16" ]; } && [ "$ARTIFACT_UPLOAD_MODE" = "上传全部" ]; then
     stage_build_boot_a13plus "$@"
   else
@@ -3518,10 +3521,10 @@ usage() {
 EOF
 }
 
-# P2-3 修复：REVISION / OS_PATCH_LEVEL 会被直接内插进 curl URL（如 GKI_URL）、
+# REVISION / OS_PATCH_LEVEL 会被直接内插进 curl URL（如 GKI_URL）、
 # 产物文件名、git 分支名与 mkbootimg --os_patch_level。若缺失白名单，含 $(...) 的
 # 输入会在双引号内触发命令替换（命令注入）。这里做早期 fail-closed 校验，任何阶段
-# 运行前即拦截；白名单与 P1-1 的 VERSION 一致：字母数字及 . _ -。
+# 运行前即拦截；白名单为：字母数字及 . _ -。
 validate_inputs() {
   local v val
 

@@ -61,14 +61,14 @@ permissions:
         required: false
         type: boolean
         default: false
-      # [移植] 网络增强：IPSet 全类型 + BBR + FQ/FQ_CODEL + IPv6 NAT + 附加拥塞算法。
+      # 网络增强：IPSet 全类型 + BBR + FQ/FQ_CODEL + IPv6 NAT + 附加拥塞算法。
       # 全部是内核既有配置的启用，不引入第三方代码；默认关闭。
       use_net_enhance:
         description: "启用网络增强（IPSet + BBR + FQ 队列 + IPv6 NAT + 附加拥塞算法）"
         required: false
         type: boolean
         default: false
-      # [移植] 兼容跳过：可选增强项失败时降级为警告并继续构建，而非中断。
+      # 兼容跳过：可选增强项失败时降级为警告并继续构建，而非中断。
       # SUSFS 与一加 8E 支持不在跳过范围内（二者失败仍中断），详见
       # scripts/build_kernel.sh 的 phase_skippable 白名单。
       skip_incompatible:
@@ -76,7 +76,7 @@ permissions:
         required: false
         type: boolean
         default: false
-      # [移植] 27e129e NoMount 挂载元模块。二进制布尔，默认关闭；由 kernel-a1*.yml /
+      # 27e129e NoMount 挂载元模块。二进制布尔，默认关闭；由 kernel-a1*.yml /
       # kernel-custom.yml 透传。main.yml 因 workflow_dispatch 的 25 input 上限已满，
       # 暂不在手动界面暴露（编排路径恒定 false）。
       use_nomount:
@@ -232,7 +232,7 @@ jobs:
           if [ -n "$seg1" ]; then sukisu="$seg1"; fi
           if [ -n "$seg2" ]; then susfs="$seg2"; fi
         fi
-        # 保留原有校验：只允许 40 位（SHA-1）或 64 位（SHA-256）十六进制
+        # 只接受 40 位（SHA-1）或 64 位（SHA-256）十六进制提交号。
         for entry in "SukiSU/管理器:$sukisu" "SUSFS:$susfs"; do
           label=${entry%%:*}; val=${entry#*:}
           [ -z "$val" ] && continue
@@ -289,7 +289,7 @@ jobs:
           echo "SukiSU 固定提交: $SUKISU_COMMIT"
         fi
         if [ -n "$SUSFS_COMMIT" ]; then
-          # P2-4 修复：替换侧转义 &，避免 SUSFS_BRANCH 含 & 时被 sed 当作整匹配引用
+          # 替换侧转义 &，避免 SUSFS_BRANCH 含 & 时被 sed 当作整匹配引用
           SUSFS_BRANCH_REPL="${SUSFS_BRANCH//&/\&}"
           sed -i "s|^${SUSFS_BRANCH_ESC}=.*|${SUSFS_BRANCH_REPL}=$SUSFS_COMMIT|" config/config
           echo "SUSFS 固定提交: $SUSFS_COMMIT"
@@ -416,7 +416,7 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         cache_sign_key: ${{ secrets.CACHE_SIGN_KEY }}
     - name: 上传编译失败日志
-      # A-3：原为 always()，构建成功时也会上传 Build-Logs，
+      # 原为 always()，构建成功时也会上传 Build-Logs，
       # 而汇总 job 全量下载后把它当内核产物传上 Release。只在失败时上传。
       if: failure()
       uses: actions/upload-artifact@v6
@@ -440,7 +440,7 @@ jobs:
       if: inputs.artifact_upload_mode != '上传全部' && inputs.artifact_upload_mode != '不上传'
       uses: actions/upload-artifact@v6
       with:
-        # A-1 闭环：stage_prepare_anykernel3 生成的 zip 落在 workspace 根（../$_zip），
+        # stage_prepare_anykernel3 生成的 zip 落在 workspace 根（../$_zip），
         # 不在 AnyKernel3/ 目录内。上传「上传全部」分支已用 '*AnyKernel3.zip' 收集，
         # 此处必须一致，否则 zip 生成后被静默丢弃，用户仍拿不到可刷包。
         name: ${{ inputs.ksu_variant }}_kernel-${{ env.CONFIG }}${{ env.ARTIFACT_SUFFIX }}-AnyKernel3

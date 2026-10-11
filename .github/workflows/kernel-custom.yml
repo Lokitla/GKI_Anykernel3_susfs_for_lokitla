@@ -96,7 +96,7 @@ on:
         type: boolean
         default: true
       use_bbg:
-        description: "启用 BBG 防格机"
+        description: "启用 BBG 基带保护（防止基带分区被擦除）"
         required: true
         type: boolean
         default: false

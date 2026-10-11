@@ -10,7 +10,7 @@ on:
       - 'data/**'
       - 'web/**'
       - 'scripts/**'
-      # [移植] 9c6d1f8：scripts/susfs_fixes/ 是构建期由 build.yml 调用的补丁修复脚本，
+      # 9c6d1f8：scripts/susfs_fixes/ 是构建期由 build.yml 调用的补丁修复脚本，
       # 与版本数据抓取无关，改它不该触发数据刷新 + Pages 重部署
       - '!scripts/susfs_fixes/**'
 
@@ -52,12 +52,15 @@ jobs:
             *) echo "::error::update_data.py 返回未预期的退出码 $exit_code"; exit 1 ;;
           esac
 
+      - name: Update full build matrix
+        run: python3 scripts/update_full_matrix.py
+
       - name: Commit data changes
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
+          git add data/ .github/workflows/config/matrix.json
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No data changes to commit."
@@ -74,7 +77,7 @@ jobs:
           fi
 
   deploy-pages:
-    # [融合] 原为硬编码上游仓库，fork 后 Pages 部署永不执行；改为当前仓库即可
+    # 原为硬编码上游仓库，fork 后 Pages 部署永不执行；改为当前仓库即可
     if: ${{ contains(fromJSON('["zzh20188/GKI_KernelSU_SUSFS", "Lokitla/GKI_SUKISU_SUSFS_for_Lokita"]'), github.repository) }}
     needs: update-data
     runs-on: ubuntu-24.04
@@ -107,7 +110,7 @@ jobs:
         working-directory: web
         run: npm ci && npx webpack --mode production
 
-      # [移植] 448d9ee：Pages 产物只需要页面、dist/、data/ 与 assets/，
+      # 448d9ee：Pages 产物只需要页面、dist/、data/ 与 assets/，
       # node_modules 有 40MB 以上，上传前清掉
       - name: Trim Pages artifact
         run: rm -rf web/node_modules

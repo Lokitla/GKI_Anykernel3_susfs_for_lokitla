@@ -68,16 +68,14 @@ on:
         default: "Thu Sep 17 00:00:00 UTC 2026"
 
       # ==================== 开关（默认关闭） ====================
-      # 6.12 上 ZRAM 恒不生效，默认关闭以免"勾了却空转"：
-      # 上游 SukiSU_patch 的 other/zram/zram_patch/ 只有 5.10 / 5.15 / 6.1 / 6.6
-      # 四个目录，没有 6.12，setup_zram_lz4 与 config_zram 两阶段会整段跳过。
+      # 6.12 补丁由本仓库维护；默认仍关闭，需要时可显式启用。
       use_zram:
-        description: "启用 ZRAM 增强算法（6.12 暂无 lz4k 补丁栈，开启无效）"
+        description: "启用 ZRAM 增强算法（使用本仓库维护的 6.12 补丁）"
         required: true
         type: boolean
         default: false
       use_bbg:
-        description: "启用 BBG 防格机"
+        description: "启用 BBG 基带保护（防止基带分区被擦除）"
         required: true
         type: boolean
         default: false
@@ -296,9 +294,7 @@ jobs:
       ksu_commit: ${{ inputs.ksu_commit }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
-      # 这里原本写死 false，把 use_zram 的默认值（true）静默盖掉 ——
-      # UI 上看着勾了 ZRAM，实际构建却没开。6.12 上 ZRAM 的真实处置交给
-      # 脚本：上游 lz4k 补丁栈只到 6.6，没有就整段跳过并告警，别在这里替它决定。
+      # 将 ZRAM 开关传给统一脚本，由脚本校验本地 6.12 补丁及配套源码。
       use_zram: ${{ inputs.use_zram || false }}
       use_bbg: ${{ inputs.use_bbg }}
       use_kpm: ${{ inputs.use_kpm }}

@@ -3,8 +3,8 @@
 Build the kernel on your own machine, without GitHub Actions.
 
 **Local and CI share the same build logic** — `build.py` only parses arguments; every real step
-lives in [`scripts/build_kernel.sh`](../scripts/build_kernel.sh) (48 phases). Both behave
-identically, so there is no second implementation to keep in sync.
+lives in [`scripts/build_kernel.sh`](../scripts/build_kernel.sh). Run `--list-phases` to see
+the current phase list.
 
 > Change build behaviour in `scripts/build_kernel.sh`, never by rewriting shell inside
 > `.github/workflows/build.yml` — that would fork local and CI immediately.
@@ -28,7 +28,7 @@ identically, so there is no second implementation to keep in sync.
 # List supported version combos (data comes from data/)
 python3 build.py --list-configs
 
-# List all 48 build phases
+# List build phases
 python3 build.py --list-phases
 
 # Build a single version
@@ -105,7 +105,7 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 ## Resuming and single-step debugging
 
-The build is split into 48 phases; `--list-phases` prints the full numbered list. A kernel build
+The build is split into phases; `--list-phases` prints the current numbered list. A kernel build
 takes tens of minutes, so rerunning everything is expensive — use these two flags to rerun only
 what broke:
 

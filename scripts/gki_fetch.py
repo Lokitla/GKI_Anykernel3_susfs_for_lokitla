@@ -32,7 +32,24 @@ import binascii
 
 ERRORS = (urllib.error.HTTPError, urllib.error.URLError,
           TimeoutError, http.client.RemoteDisconnected,
-          ConnectionResetError, OSError, binascii.Error)
+          http.client.HTTPException, ConnectionResetError,
+          OSError, binascii.Error)
+
+
+def fetch_bytes(url: str, timeout: int = 20, attempts: int = 3) -> bytes | None:
+    """请求 URL；对瞬时网络错误做短退避重试，最终失败返回 None。"""
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return resp.read()
+        except ERRORS as exc:
+            if attempt == attempts:
+                print(f"WARNING: request failed after {attempts} attempts: {url} ({exc})")
+                return None
+            delay = attempt
+            print(f"WARNING: request failed ({exc}); retrying in {delay}s ({attempt}/{attempts})")
+            time.sleep(delay)
+    return None
 
 
 def get_end_date(end: str | None) -> str:
@@ -57,12 +74,14 @@ def make_date_range(start: str, end: str) -> list[str]:
     return dates
 
 
-def try_fetch(url: str) -> str | None:
-    """尝试请求一个 URL，失败返回 None"""
+def try_fetch(url: str, attempts: int = 3) -> str | None:
+    """尝试请求 Gitiles 文本，瞬时失败自动重试，最终失败返回 None"""
+    raw = fetch_bytes(url, timeout=20, attempts=attempts)
+    if raw is None:
+        return None
     try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            return base64.b64decode(resp.read()).decode("utf-8", errors="replace")
-    except ERRORS:
+        return base64.b64decode(raw).decode("utf-8", errors="replace")
+    except binascii.Error:
         return None
 
 
@@ -71,11 +90,10 @@ def fetch_refs() -> tuple[set[str], set[str]] | None:
     result = []
     for kind in ("heads", "tags"):
         url = f"{REFS_URL}/{kind}?format=JSON"
-        try:
-            with urllib.request.urlopen(url, timeout=60) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-        except ERRORS:
+        body = fetch_bytes(url, timeout=60)
+        if body is None:
             return None
+        raw = body.decode("utf-8", errors="replace")
         # gitiles 的 JSON 响应前面带一行防 XSSI 前缀
         if raw.startswith(")]}'"):
             raw = raw.split("\n", 1)[1]
