@@ -162,8 +162,23 @@ jobs:
             echo "无新提交"
           fi
 
-      - name: 回写最新提交号到 sha-bakasu 分支
+      - name: 上游 SUSFS 闸门健康检查
+        id: health
         if: steps.compare.outputs.new_commit == 'true'
+        env:
+          LATEST_SHA: ${{ steps.get_sha.outputs.sha }}
+        run: |
+          set -uo pipefail
+          # 命中挂起时 ok=false：既不回写 sha 也不触发构建。
+          # 不回写是关键——上游解除挂起后，下次 cron 仍会判为"有新提交"并补建。
+          if bash scripts/check_upstream_susfs.sh --variant BakaSU --ref "${LATEST_SHA:-main}"; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::上游 SUSFS 已挂起，本次跳过构建且不回写 sha-bakasu（上游解除后会自动补建）"
+          fi
+      - name: 回写最新提交号到 sha-bakasu 分支
+        if: steps.compare.outputs.new_commit == 'true' && steps.health.outputs.ok != 'false'
         env:
           SHA_BRANCH: sha-bakasu
         run: |
@@ -180,7 +195,7 @@ jobs:
           git push origin "$SHA_BRANCH"
 
       - name: 触发构建工作流
-        if: steps.compare.outputs.new_commit == 'true'
+        if: steps.compare.outputs.new_commit == 'true' && steps.health.outputs.ok != 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCOPE: ${{ inputs.build_scope || '全部版本' }}

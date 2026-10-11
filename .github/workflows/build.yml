@@ -323,6 +323,20 @@ jobs:
 
           mkbootimg'
         key: toolchain-${{ runner.os }}-v1
+    - name: 上游 SUSFS 闸门健康检查（fail-fast）
+      # BakaSU 上游会在 kernel/tools/susfs_compat.mk 末尾追加无条件的
+      # $(error Please wait susfs update.) 主动挂起 SUSFS 构建
+      # （2026-10-10 提交 48fa4bb）。原行为要等到 compile_kernel 阶段编
+      # drivers/kernelsu 才失败，整轮白跑 20+ 分钟。这里提前探测，命中立刻停。
+      # 探测 ref 跟随内核实际要检出的提交：填了对齐提交就查它，否则查 main。
+      if: ${{ inputs.enable_susfs && inputs.ksu_variant == 'BakaSU' }}
+      env:
+        KSU_VARIANT_IN: ${{ inputs.ksu_variant }}
+        KSU_COMMIT_IN: ${{ inputs.ksu_commit }}
+      run: |
+        bash scripts/check_upstream_susfs.sh \
+          --variant "$KSU_VARIANT_IN" \
+          --ref "${KSU_COMMIT_IN:-main}"
     - name: 构建内核
       id: build
       run: bash scripts/build_kernel.sh --all
