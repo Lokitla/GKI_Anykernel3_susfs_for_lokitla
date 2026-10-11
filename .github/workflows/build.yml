@@ -28,7 +28,7 @@ permissions:
         required: true
         type: string
       ksu_commit:
-        description: "对齐用：内核 KernelSU 检出到该提交（所选官方 Manager 构建的同一提交；留空跟随上游 main HEAD）"
+        description: "内核 KSU 对齐提交（备用）。界面上请填「提交 hash」合并输入框的第 1 段——管理器与内核 KSU 共用同一提交；本 input 仅在该段为 0/空时生效，kernel-custom.yml 用它承载自动对齐值"
         required: false
         type: string
         default: ""
@@ -184,9 +184,16 @@ jobs:
     steps:
     - name: 检出代码仓库
       uses: actions/checkout@v7
-    # 界面上「管理器提交 hash」是合并后的单个输入框，这里按逗号拆回两个 hash。
+    # 界面上「提交 hash」是合并后的单个输入框，这里拆回各段。
     # GitHub 表达式没有 split，所以必须落在有 shell 的这一步。
-    # 拆分后仍走原有校验与实际行为，不新增也不跳过任何逻辑。
+    #
+    # 合并输入框语法（逗号或竖线分隔均可，0 = 该段不指定）：
+    #   <管理器&内核KSU>,<SUSFS>     例：abc123...,def456...  两段都锁
+    #   0,def456...                 只锁 SUSFS，管理器与内核不指定
+    #   abc123...,0                 只锁管理器与内核，SUSFS 不指定
+    #   abc123...|def456...         竖线分隔，等价
+    # 第 1 段同时供「管理器 APK」与「内核 KSU 对齐」使用（二者共用同一提交）。
+    # 段值为 0 或空时不覆盖对应的独立 input（sukisu_commit / susfs_commit）。
     - name: 解析提交 hash（合并输入框）
       id: resolve_commits
       # 安全：外部输入一律经 env 传入，run 块中不出现 ${{ }}
@@ -199,18 +206,31 @@ jobs:
         sukisu="$SUKISU_COMMIT_IN"
         susfs="$SUSFS_COMMIT_IN"
         if [ -n "$MANAGER_COMMIT" ]; then
-          case "$MANAGER_COMMIT" in
-            *,*)
-              sukisu=$(printf '%s' "$MANAGER_COMMIT" | cut -d',' -f1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-              susfs=$(printf '%s' "$MANAGER_COMMIT" | cut -d',' -f2 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-              printf '%s' "$MANAGER_COMMIT" | cut -d',' -f3- | grep -q . \
-                && echo "::warning::管理器提交 hash 超过两段，已忽略第 3 段及之后的内容"
-              ;;
-            *)
-              sukisu=$(printf '%s' "$MANAGER_COMMIT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-              susfs=""
-              ;;
+          # 归一化：去掉空白与引号，便于直接粘贴 0,"abc..." / "abc",0 这类写法
+          raw=$(printf '%s' "$MANAGER_COMMIT" | tr -d '[:space:]' | tr -d '"' | tr -d "'")
+          # 分隔符支持逗号或竖线，取先出现的那种（两者混用时按先出现的算）
+          case "$raw" in
+            *"|"*) SEP='|' ;;
+            *)     SEP=',' ;;
           esac
+          # 拆两段：第 1 段=管理器&内核KSU 共用，第 2 段=SUSFS
+          seg1="${raw%%$SEP*}"
+          if [ "$seg1" = "$raw" ]; then
+            seg2=""
+          else
+            seg2="${raw#*$SEP}"
+            seg2="${seg2%%$SEP*}"
+          fi
+          # 0 = 该段不指定
+          if [ "$seg1" = "0" ]; then seg1=""; fi
+          if [ "$seg2" = "0" ]; then seg2=""; fi
+          # 超过两段时忽略第 3 段及之后
+          if [ -n "$seg2" ] && [ "${raw#*$SEP*$SEP}" != "$raw" ]; then
+            echo "::warning::管理器提交 hash 超过两段，已忽略第 3 段及之后的内容"
+          fi
+          # 只有显式给出（非 0、非空）的段才覆盖
+          if [ -n "$seg1" ]; then sukisu="$seg1"; fi
+          if [ -n "$seg2" ]; then susfs="$seg2"; fi
         fi
         # 保留原有校验：只允许 40 位（SHA-1）或 64 位（SHA-256）十六进制
         for entry in "SukiSU/管理器:$sukisu" "SUSFS:$susfs"; do
@@ -226,7 +246,9 @@ jobs:
         done
         echo "sukisu_commit=$sukisu" >> "$GITHUB_OUTPUT"
         echo "susfs_commit=$susfs" >> "$GITHUB_OUTPUT"
-        echo "解析结果: SukiSU/管理器='${sukisu:-<不锁定>}'  SUSFS='${susfs:-<不锁定>}'"
+        # 内核 KSU 对齐与管理器共用第 1 段（见 KSU_COMMIT 处注释）
+        echo "ksu_commit=$sukisu" >> "$GITHUB_OUTPUT"
+        echo "解析结果: 管理器&内核KSU='${sukisu:-<不锁定>}'  SUSFS='${susfs:-<不锁定>}'"
     - name: 应用自定义提交
       if: ${{ inputs.manager_commit != '' || inputs.sukisu_commit != '' || inputs.susfs_commit != '' }}
       # 安全：所有外部输入一律经 env 传入，run 块中不得出现 ${{ }}。
@@ -332,7 +354,8 @@ jobs:
       if: ${{ inputs.enable_susfs && inputs.ksu_variant == 'BakaSU' }}
       env:
         KSU_VARIANT_IN: ${{ inputs.ksu_variant }}
-        KSU_COMMIT_IN: ${{ inputs.ksu_commit }}
+        # 与实际检出保持一致：同样优先取合并输入框第 1 段
+        KSU_COMMIT_IN: ${{ steps.resolve_commits.outputs.ksu_commit || inputs.ksu_commit }}
       run: |
         bash scripts/check_upstream_susfs.sh \
           --variant "$KSU_VARIANT_IN" \
@@ -366,8 +389,9 @@ jobs:
         DROIDSPACES_NTSYNC: ${{ inputs.droidspaces_ntsync }}
         ARTIFACT_UPLOAD_MODE: ${{ inputs.artifact_upload_mode }}
         USE_BBR: ${{ inputs.use_bbr }}
-        # BakaSU 对齐：内核 KernelSU 检出到所选 Manager 构建的同一提交（空=main HEAD）
-        KSU_COMMIT: ${{ inputs.ksu_commit }}
+        # BakaSU 对齐：内核 KernelSU 检出到该提交（空=跟随 main HEAD）。
+        # 优先级：合并输入框第 1 段（管理器&内核KSU 共用）> 本 input（承载自动对齐值）。
+        KSU_COMMIT: ${{ steps.resolve_commits.outputs.ksu_commit || inputs.ksu_commit }}
         # SUSFS 原始补丁探测：apply.sh 是 build_kernel.sh 的 bash 子进程，
         # 这三个开关在这里给出才能一路透到 apply.sh；缺失的话 apply.sh 里
         # ${SUSFS_RAW_PROBE:-false} 恒为 false，探测会静默退化成常规构建。
