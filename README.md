@@ -41,7 +41,7 @@
 
 ```
 GitHub Actions  ──┐
-                  ├──►  scripts/build_kernel.sh  （47 个阶段，唯一构建逻辑来源）
+                  ├──►  scripts/build_kernel.sh  （48 个阶段，唯一构建逻辑来源）
 本地 build.py   ──┘
 ```
 
@@ -80,7 +80,7 @@ GitHub Actions  ──┐
 |---|---|---|---|---|---|---|---|
 | **auto**（精简） | 5 | 6 | 5 | 3 | — | **19** | 自动触发、被 `main.yml` 调用的单版本入口 |
 | **full**（全量） | 22 | 20 | 23 | 15 | 4 | **84** | 手动触发独立单版本入口 |
-| **data 全集** | 36 | 35 | 32 | 16 | 8 | **127** | `data/` 里"全部可用版本"的定义，`build.py --all` 的来源 |
+| **data 全集** | 36 | 35 | 32 | 17 | 8 | **128** | `data/` 里"全部可用版本"的定义，`build.py --all` 的来源 |
 
 > **6.12 不在 auto 矩阵里**，所以自动构建与「构建内核」都不会带它
 > （勾 `include_612` 也不会）。需要 6.12 请**手动触发「内核构建 - Android 16 (6.12)」**
@@ -314,7 +314,7 @@ python3 build.py --android android12 --kernel 5.10 --sub-level 236 \
                  --zram --net-enhance --nomount --rekernel
 ```
 
-支持 47 个构建阶段、断点续建（`--from`）、单步重跑（`--only`）。
+支持 48 个构建阶段、断点续建（`--from`）、单步重跑（`--only`）。
 完整参数见 [docs/local-build.md](docs/local-build.md)。
 
 ---
@@ -323,7 +323,7 @@ python3 build.py --android android12 --kernel 5.10 --sub-level 236 \
 
 | 路径 | 用途 |
 |---|---|
-| `scripts/build_kernel.sh` | **构建逻辑唯一来源**，47 个阶段 |
+| `scripts/build_kernel.sh` | **构建逻辑唯一来源**，48 个阶段 |
 | `build.py` | 本地 CLI 入口，只做参数解析并调用上面的脚本 |
 | `.github/workflows/build.yml` | 可复用构建工作流（缓存 / 产物 / 日志 / 通知） |
 | `.github/workflows/main.yml` | 「构建内核」总入口，展开矩阵 |
@@ -337,12 +337,11 @@ python3 build.py --android android12 --kernel 5.10 --sub-level 236 \
 | `.github/workflows/susfs-probe.yml` | **批量工具**：用原始 SUSFS 补丁全量编译，校准兼容线 |
 | `scripts/susfs_probe/` | 探测用的矩阵生成 / 结论汇总脚本 |
 | `config/` | 配置片段、`config/config` 提交锁定 |
-| `data/` | 各版本可用的内核子版本与补丁级别（127 条） |
+| `data/` | 各版本可用的内核子版本与补丁级别（128 条） |
 | `security_patch/` | CVE-2026-43499 修复链 |
 | `zram/` | LZ4 的 ARM64 NEON 加速实现 |
 | `web/` | GitHub Pages 站点源码 |
 | `scripts/susfs_fixes/apply.sh` | SUSFS 补丁适配与冲突修复 |
-| `scripts/susfs_probe/` | SUSFS 原始补丁探测脚本（取自上游 zzh20188 的 `susfs-probe` 工具分支），用于校准兼容线；配套工作流尚未引入 |
 | `tools/migration/` | 迁移期一次性脚本，**不参与构建** |
 | `FUSION.md` | 三个上游仓库的比对与迁移记录 |
 
