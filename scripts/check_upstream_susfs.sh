@@ -70,7 +70,7 @@ if [ -z "$CONTENT" ]; then
   exit 0
 fi
 
-if printf '%s\n' "$CONTENT" | grep -qE '^\s*\$\(error'; then
+if grep -qE '^\s*\$\(error' <<< "$CONTENT"; then
   # 上游在挂起 = 常态（自 48fa4bb 起一直如此）。真正该不该放行，取决于
   # **本树**的 SUSFS 集成形态，只有补丁打完才看得出来；那个判定由
   # build_kernel.sh 的 bakasu_susfs_gate 阶段（调用
