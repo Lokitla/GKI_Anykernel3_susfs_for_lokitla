@@ -112,3 +112,96 @@ BBG_KCONFIG_EXPECT=(
 HIDDEN_CONFIG_DENY=(
   CONFIG_NETFS_SUPPORT
 )
+
+: "${SUPP_OP:=false}"
+# 严格许可模式会跳过许可未明或采用非标准许可的可选补丁。来源和许可信息见
+# THIRD_PARTY_NOTICES.md。默认关闭。
+: "${STRICT_LICENSE_MODE:=false}"
+: "${DROIDSPACES:=不启用}"
+: "${DROIDSPACES_NTSYNC:=false}"
+: "${ARTIFACT_UPLOAD_MODE:=上传全部}"
+
+# USE_KPM 取值归一化：Actions 下拉传 "enabled (开启)" / "patched (开启并修补)"，
+# 早期本地 CLI 传 "true"/"false"，而脚本只按 enabled* / patched* 匹配，
+# 导致 --kpm 静默失效。这里统一成三态，任何入口传什么都不至于判错。
+case "${USE_KPM,,}" in
+  enabled*|patched*) : ;;
+  true|1|yes|on|开启)  USE_KPM="enabled (开启)" ;;
+  *)                   USE_KPM="disabled (关闭)" ;;
+esac
+
+# KPM 镜像修补工具，移植自 ShirkNeko/GKI_KernelSU_SUSFS (scripts/config.py)
+# ShirkNeko/SukiSU_patch 已改名为 SukiSU-Ultra/SukiSU_patch，旧路径目前靠 301 跳转苟活，
+# 直接指向新名字，免得哪天跳转撤掉就整片构建一起挂。
+# 跟随 SukiSU_patch 上游 main 分支（不钉 commit，便于自动跟进上游）
+: "${KPM_PATCH_URL:=https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux}"
+# KPM 修补工具的可选 sha256 锚点。留空则不校验（跟随 main、零锚点风险）；
+# 传入具体 64 位 hex 后，下方 stage_patch_kpm 会做 fail-closed 比对，不符即拒绝执行。
+# 入口优先级（高 → 低）：
+#   1) 环境变量 EXPECTED_KPM_PATCH_SHA256（CI: build.yml inputs.kpm_patch_sha256；本地: --kpm-patch-sha256）
+#   2) $WORKSPACE/config/kpm_patch_sha256（仓库内单一 pin 源，可用 scripts/tools/pin_kpm_patch.sh 生成）
+#   3) 空 → 不校验，打印 ::warning:: 明示零锚点运行
+: "${EXPECTED_KPM_PATCH_SHA256:=}"
+: "${WORKSPACE:=$(pwd)}"
+: "${COMPILE_TIMEOUT_MINUTES:=30}"
+: "${COMPILE_MAX_ATTEMPTS:=3}"
+: "${GITHUB_SHA:=$(git -C "$WORKSPACE" rev-parse HEAD 2>/dev/null || echo unknown)}"
+: "${GITHUB_RUN_ID:=local}"
+: "${GITHUB_SERVER_URL:=}"
+: "${GITHUB_REPOSITORY:=}"
+: "${MANAGER_STR:=}"
+export WORKSPACE GITHUB_SHA GITHUB_RUN_ID GITHUB_SERVER_URL GITHUB_REPOSITORY MANAGER_STR
+export ANDROID_VERSION
+export KERNEL_VERSION
+export SUB_LEVEL
+export OS_PATCH_LEVEL
+export KSU_VARIANT
+export KSU_MODE
+export VERSION
+export REVISION
+export BUILD_TIME
+export USE_ZRAM
+export USE_BBR
+export USE_BBG
+export USE_KPM
+export USE_REKERNEL
+export USE_NET_ENHANCE
+export SKIP_INCOMPATIBLE
+export USE_NOMOUNT
+export CVE_2026_43499_PATCH
+export EXPORT_SUSFS_PATCHES
+export ENABLE_SUSFS
+export EXPECTED_KPM_PATCH_SHA256
+export SUPP_OP
+export STRICT_LICENSE_MODE
+# SUSFS 原始补丁探测的三个开关必须 export：apply.sh 是 bash 子进程调用的，
+# 不 export 的话子进程里 ${SUSFS_RAW_PROBE:-false} 恒为 false，探测形同虚设。
+# SUSFS_PROBE_DIR 是 apply.json 的写出目录，同样要透过去；build.yml 负责设置。
+export SUSFS_RAW_PROBE SUSFS_SIDE_FIXES SUSFS_PIN_TIME
+: "${SUSFS_PROBE_DIR:=$WORKSPACE/susfs-probe}"
+export SUSFS_PROBE_DIR
+# 探测矩阵里同一子版本会跨多个月份出现（如 5.10.209 的 2024-11 与 2025-01），
+# 而 CONFIG 只到子版本这一步，产物名不带月份就会互相覆盖。
+ARTIFACT_SUFFIX=""
+if [ "${SUSFS_RAW_PROBE:-false}" = "true" ]; then
+  ARTIFACT_SUFFIX="-${OS_PATCH_LEVEL:-unknown}"
+fi
+export ARTIFACT_SUFFIX
+export DROIDSPACES
+export DROIDSPACES_NTSYNC
+export ARTIFACT_UPLOAD_MODE
+
+# ---------------------------- 运行时状态 ----------------------------
+export COMPILE_FAILED=0
+export SUSFS_PATCH_EXPORT=false
+export REJ_COUNT=0
+export TOOLCHAIN_CACHE_HIT="${TOOLCHAIN_CACHE_HIT:-false}"
+# 注意：切勿在全局导出 OUT_DIR —— GKI 的 build/build.sh 会把它当作内核输出目录继承，
+# 导致产物从 out/<branch>/dist 跑到别处。SUSFS 补丁导出目录请在阶段内局部定义。
+
+log_stage() {
+  echo ""
+  echo "================================================================"
+  echo "  [$1] $2"
+  echo "================================================================"
+}
