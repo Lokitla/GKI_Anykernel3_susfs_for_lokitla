@@ -20,6 +20,11 @@
 # while [ $# -gt 0 ] 因 $# 不变而死循环，CI 上会一直挂到超时。
 set -euo pipefail
 
+# 本脚本所在目录：下面要用它判断同仓的 bakasu_compat/resume_susfs.sh 是否存在。
+# 必须在 set -u 之下先定义，否则引用未定义变量会直接以 unbound variable 中止，
+# 而不是走到我们想要的「没有树内判定脚本就按老逻辑 fail-fast」分支。
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 VARIANT="BakaSU"
 REF="main"
 
@@ -66,6 +71,40 @@ if [ -z "$CONTENT" ]; then
 fi
 
 if printf '%s\n' "$CONTENT" | grep -qE '^\s*\$\(error'; then
+  # 上游在挂起 = 常态（自 48fa4bb 起一直如此）。真正该不该放行，取决于
+  # **本树**的 SUSFS 集成形态，只有补丁打完才看得出来；那个判定由
+  # build_kernel.sh 的 bakasu_susfs_gate 阶段（调用
+  # scripts/bakasu_compat/resume_susfs.sh）在 apply_susfs 之后做。
+  #
+  # 所以这里不再直接失败——否则这个提前探测会先把构建掐掉，
+  # 让真正有依据的判定永远跑不到，等于把「按证据判定」降级成「一律拒绝」。
+  # 这里只做情报：告诉调用方上游处于挂起，判定将延后到树内完成。
+  if [ -f "$SELF_DIR/bakasu_compat/resume_susfs.sh" ]; then
+    echo "::notice::上游 BakaSU 处于 SUSFS 挂起状态（ref=${REF} 含 \$(error)）"
+    cat <<'INFO'
+
+  上游自 48fa4bb 起在 kernel/tools/susfs_compat.mk 末尾保留**无条件**
+  $(error Please wait susfs update.)，动机是 SUSFS 未同步最新 KernelSU 的
+  selinux_hide 模型（可用性/隐蔽性受影响）。
+
+  本仓库不在这里一概拒绝，而是延后到树内按证据判定：
+    scripts/bakasu_compat/resume_susfs.sh（移植自 LingLuo17/AnyKernel3 6db3a675）
+    在 apply_susfs 之后核对本树是否真的具备新模型：
+      <  6.6：hooks.c 有手动钩子 ksu_selinux_hide_running 但缺
+              should_check_current → 属旧 SUSFS，仍阻断；
+      >= 6.6：selinuxfs.c 缺 security_context_to_sid_with_policy → 仍阻断；
+      无法判定 → 一律阻断（fail-closed）。
+    判定不通过时构建会在 bakasu_susfs_gate 阶段明确失败（不是等到编
+    drivers/kernelsu 才炸），并打印上述规避指引。
+
+  若想立刻绕过判定（不推荐，会带回上游要规避的检测风险）：关闭 SUSFS
+  （enable_susfs=false），或把内核对齐到挂起前的提交
+  5b76b884c75f729a220bb317aa4a4fc78f0e0e9c。
+INFO
+    exit 0
+  fi
+
+  # 没有树内判定脚本时保持原有 fail-fast：这时提前拦截仍是净收益。
   echo "::error::上游 BakaSU 已主动挂起 SUSFS 构建（ref=${REF} 的 susfs_compat.mk 含 \$(error)）"
   cat <<'GUIDE'
 
