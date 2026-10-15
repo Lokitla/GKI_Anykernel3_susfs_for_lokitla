@@ -852,8 +852,20 @@ jobs:
           echo "SUSFS 模块已下载并整理完成"
 
       - name: Notify on failure
-        if: steps.add_KSU.outcome == 'failure'
-        run: echo "下载CI构建的KSU失败!"
+        if: steps.add_KSU.outcome == 'failure' || steps.add_SUSFS.outcome == 'failure'
+        env:
+          KSU_OUTCOME: ${{ steps.add_KSU.outcome }}
+          SUSFS_OUTCOME: ${{ steps.add_SUSFS.outcome }}
+        run: |
+          if [ "$KSU_OUTCOME" = "failure" ]; then
+            echo "下载CI构建的KSU失败!"
+          fi
+          # add_SUSFS 是 continue-on-error，失败了构建也会继续，产物会静默缺少 SUSFS 模块；
+          # 上游 zzh20188 为这一步单独留了提示，本仓库原先漏了，导致「SUSFS 模块没下到」
+          # 只能靠产物里少一个目录发现。这里补上，且与 KSU 的提示分开写，便于定位。
+          if [ "$SUSFS_OUTCOME" = "failure" ]; then
+            echo "下载CI构建的SUSFS模块失败!（构建继续，但产物中不含 SUSFS 模块，请检查上面的 add SUSFS 步骤日志）"
+          fi
 
       # 按 APK 路径/文件名是否含 spoofed 分流，
       # 让普通管理器与 Spoofed（伪装官方包名）管理器成为两个独立产物，
