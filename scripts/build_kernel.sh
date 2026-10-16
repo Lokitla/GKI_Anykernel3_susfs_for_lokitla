@@ -2532,27 +2532,57 @@ stage_setup_zram_lz4() {
     # 在目标位置」。判据不从脚本里写死文件名，而是**拿源目录当清单**：源目录里有什么，
     # 目标就必须有什么——上游改文件名/挪目录时两者同步变化，不会误杀。
     #
-    # （曾经写死过 lib/lz4kd.c / crypto/lz4k_compress.c：上游真实布局是 lib/lz4kd/ 与
-    #   crypto/lz4kd.c，这两个路径根本不存在，断言必然失败、必然阻断每一次 zram 构建。
-    #   写死的名字一旦随上游布局变化，就从「护栏」变成「永久假断言」。）
+    # 必须区分 cp 的两种形态，它们的目标路径规则不同：
+    #   cp -r SRC/*  DST/  →  SRC/rel  落到 DST/rel          （glob，铺平进 DST）
+    #   cp -r SRC    DST/  →  SRC/rel  落到 DST/$(basename SRC)/rel（整目录带名拷入）
+    # 把 lz4k_oplus 那种「整目录」当成「铺平」会去查 ./lib/lz4k.c，
+    # 而实际落在 ./lib/lz4k_oplus/lz4k.c —— 又一个自造的假断言。
+    #
+    # （更早还写死过 lib/lz4kd.c / crypto/lz4k_compress.c：上游真实布局是
+    #   lib/lz4kd/ 与 crypto/lz4kd.c，这两个路径根本不存在，断言必然失败、
+    #   必然阻断每一次 zram 构建。写死的名字一旦随上游布局变化，就从「护栏」
+    #   变成「永久假断言」。）
     local -a lz4k_src_dst=(
-      "$SUKISU_PATCHES/other/zram/lz4k/include/linux:./include/linux"
-      "$SUKISU_PATCHES/other/zram/lz4k/lib:./lib"
-      "$SUKISU_PATCHES/other/zram/lz4k/crypto:./crypto"
-      "$SUKISU_PATCHES/other/zram/lz4k_oplus:./lib"
+      "$SUKISU_PATCHES/other/zram/lz4k/include/linux|./include/linux|glob"
+      "$SUKISU_PATCHES/other/zram/lz4k/lib|./lib|glob"
+      "$SUKISU_PATCHES/other/zram/lz4k/crypto|./crypto|glob"
+      "$SUKISU_PATCHES/other/zram/lz4k_oplus|./lib|dir"
     )
-    local pair src dst rel checked=0 missing=""
-    for pair in "${lz4k_src_dst[@]}"; do
-      src="${pair%%:*}"
-      dst="${pair##*:}"
+    local entry src dst mode dest_root rel checked=0 missing=""
+    for entry in "${lz4k_src_dst[@]}"; do
+      src="${entry%%|*}"
+      dst="${entry#*|}"
+      mode="${dst##*|}"
+      dst="${dst%%|*}"
+      # 源目录必须存在：zram_lz4k_available 已确认过，若此刻不在，说明拷贝路径
+      # 与判定路径脱节；此时 `cd "$src"` 会静默失败、该目录贡献 0 个文件，
+      # 断言会无声缩水（甚至缩到只剩别目录），必须显式拦住。
+      if [ ! -d "$src" ]; then
+        echo "::error title=zram 补丁栈落地校验失效::上游源码目录不存在: $src（zram_lz4k_available 判定与拷贝路径不一致）"
+        cd "$_pwd"; return 1
+      fi
+      if [ "$mode" = "dir" ]; then
+        dest_root="$dst/$(basename "$src")"
+      else
+        dest_root="$dst"
+      fi
+      local list_cmd
+      if [ "$mode" = "dir" ]; then
+        # cp -r SRC DST/ 会连顶层点文件一起搬
+        list_cmd=(find . -mindepth 1)
+      else
+        # cp -r SRC/* DST/ 是 shell glob，顶层点文件不参与匹配 —— 清单必须同样排除，
+        # 否则会拿一个 cp 根本不会搬的文件去要求目标存在，又是一处假阳性
+        list_cmd=(find . -mindepth 1 -not -path './.*')
+      fi
       while IFS= read -r rel; do
         [ -n "$rel" ] || continue
         checked=$((checked + 1))
-        if [ ! -e "$dst/$rel" ]; then
-          missing="$dst/$rel（来源 $src/$rel）"
+        if [ ! -e "$dest_root/$rel" ]; then
+          missing="$dest_root/$rel（来源 $src/$rel）"
           break 2
         fi
-      done < <(cd "$src" 2>/dev/null && find . -mindepth 1 | sed 's|^\./||' | sort)
+      done < <(cd "$src" && "${list_cmd[@]}" | sed 's|^\./||' | sort)
     done
     if [ "$checked" -eq 0 ]; then
       echo "::error title=zram 补丁栈落地校验失效::四个上游源码目录里一个文件都没枚举到，落地校验会变成空检查"
