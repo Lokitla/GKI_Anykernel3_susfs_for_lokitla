@@ -1920,9 +1920,10 @@ run_apply_susfs() {
 # 让编译空跑。
 #
 # 注意：LingLuo17 敢直接放行，是因为其 scripts/susfs_fixes/apply.sh 里有
-# 「FinaSU/BakaSU 新模型适配段」把 SUSFS 集成改到当前形态；本仓库 apply.sh
-# 没有该段（grep should_check_current / _with_sid_policy 在 scripts/ 下 0 命中），
-# 所以这里只做「有无依据的判定」，不放行没有适配的内核。
+# 「FinaSU/BakaSU 新模型适配段」把 SUSFS 集成改到当前形态；本仓库 apply.sh 现已
+# 补齐同一段（adapt_finasu_selinux_hide_model：把补丁里的 fake_state 引用改写成
+# backup_sepolicy + security_*_with_policy）。本门控仍在适配段之后独立复核树内形态，
+# 适配段没生效（缺 selinux_hide.c / 该文件仍是 fake_state 旧模型）时照旧阻断。
 stage_bakasu_susfs_gate() {
   log_stage "bakasu_susfs_gate" "校验上游 BakaSU 的 SUSFS 构建暂停是否仍然成立"
   if [ "${ENABLE_SUSFS}" != "true" ] || [ "${KSU_VARIANT}" != "BakaSU" ]; then

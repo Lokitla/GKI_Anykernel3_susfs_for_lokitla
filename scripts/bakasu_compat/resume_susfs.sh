@@ -10,15 +10,17 @@
 # 为什么不能照抄「无条件放行」：
 #   上游 48fa4bb（"kernel: suspend susfs build"）是有意暂停，动机是 SUSFS 未同步
 #   最新 KernelSU 的 selinux_hide 模型，隐藏会被检测。LingLuo17 敢放行，是因为
-#   其 scripts/susfs_fixes/apply.sh 里有 FinaSU/BakaSU 新模型适配段；本仓库的
-#   apply.sh 没有该段（grep should_check_current / security_context_to_sid_with_policy
-#   在 scripts/ 下 0 命中）。所以这里只做「把无条件的错误换成有依据的判定」，
-#   判定不成立就照旧阻断——宁可挡住，也不产出上游明确暂停的可检测内核。
+#   其 scripts/susfs_fixes/apply.sh 里有 FinaSU/BakaSU 新模型适配段；本仓库现已
+#   补齐同一段（apply.sh 的 adapt_finasu_selinux_hide_model，把补丁的 fake_state
+#   引用改写成 backup_sepolicy + security_*_with_policy）。本脚本仍然只做
+#   「把无条件的错误换成有依据的判定」：判定不成立就照旧阻断——宁可挡住，
+#   也不产出上游明确暂停的可检测内核。
 #
 # 判定规则（与上游该文件自己列出的 selinux_hide/SUSFS 符号同源）：
 #   <  6.6：hooks.c 无 ksu_selinux_hide_running（走 KernelSU 自动钩子）→ 放行；
 #           有手动钩子但缺 should_check_current（旧 SUSFS）→ 阻断；
-#   >= 6.6：selinuxfs.c 缺 security_context_to_sid_with_policy → 阻断。
+#   >= 6.6：selinuxfs.c 既无 security_context_to_sid_with_policy 也无
+#           backup_sepolicy（本仓库新模型适配后的形态）→ 阻断。
 #   无法判定（缺少 hooks.c / 版本未知 / 上游文件形态变了）→ 一律阻断（fail-closed）。
 #
 # 用法：resume_susfs.sh <KERNEL_ROOT> <KERNEL_VERSION> [KSU_DIR]
@@ -108,10 +110,10 @@ elif [ -z "$HOOKS_C" ]; then
 elif [ "$LT66" = "yes" ]; then
   if grep -q "ksu_selinux_hide_running" "$HOOKS_C"; then
     # 有手动钩子：必须同时具备侧信道修复 should_check_current，否则是旧 SUSFS。
-    if [ "$(grep -c "should_check_current" "$HOOKS_C" || true)" = "0" ]; then
-      BLOCK_REASON="hooks.c 含手动钩子 ksu_selinux_hide_running 但缺 should_check_current，属上游点名要更新的旧 SUSFS（隐藏可被检测）"
+    if [ "$(grep -c -e "should_check_current" -e "backup_sepolicy" "$HOOKS_C" || true)" = "0" ]; then
+      BLOCK_REASON="hooks.c 含手动钩子 ksu_selinux_hide_running 但既无 should_check_current 也无 backup_sepolicy，属上游点名要更新的旧 SUSFS（隐藏可被检测）"
     else
-      echo "SUSFS 门控证据成立：hooks.c 含 should_check_current（新模型侧信道修复）"
+      echo "SUSFS 门控证据成立：hooks.c 具备 should_check_current / backup_sepolicy（新模型）"
     fi
   else
     echo "SUSFS 门控证据成立：hooks.c 无手动钩子，走 KernelSU 自动钩子"
@@ -119,10 +121,10 @@ elif [ "$LT66" = "yes" ]; then
 else
   if [ -z "$SELINUXFS_C" ]; then
     BLOCK_REASON="未找到 security/selinux/selinuxfs.c，无法证明 >=6.6 的 _with_policy 模型"
-  elif [ "$(grep -c "security_context_to_sid_with_policy" "$SELINUXFS_C" || true)" = "0" ]; then
-    BLOCK_REASON="selinuxfs.c 缺 security_context_to_sid_with_policy，>=6.6 上 SUSFS 会运行时 panic"
+  elif [ "$(grep -c -e "security_context_to_sid_with_policy" -e "backup_sepolicy" "$SELINUXFS_C" || true)" = "0" ]; then
+    BLOCK_REASON="selinuxfs.c 既无 security_context_to_sid_with_policy 也无 backup_sepolicy，>=6.6 上 SUSFS 会运行时 panic"
   else
-    echo "SUSFS 门控证据成立：selinuxfs.c 含 security_context_to_sid_with_policy"
+    echo "SUSFS 门控证据成立：selinuxfs.c 具备 _with_policy / backup_sepolicy 新模型"
   fi
 fi
 
@@ -136,8 +138,9 @@ if [ -n "$BLOCK_REASON" ]; then
   规避方式：
     1) 关闭 SUSFS：enable_susfs=false（能编过，但产物不含 SUSFS）；
     2) 等上游解除暂停：Auto_Trigger_BakaSU 每 3 天检测一次，解除后自动补建；
-    3) 补齐适配：把 LingLuo17 6db3a675 配套的 apply.sh 新模型适配段移植进来
-       （本仓库待办：SUSFS 上下文/API 漂移适配），届时本门控会自动放行。
+    3) 检查适配段是否真的生效：apply.sh 的 adapt_finasu_selinux_hide_model 需要
+       KernelSU/kernel/feature/selinux_hide.c 已切到 backup_sepolicy 新模型；若该文件
+       仍是假的（缺文件 / 仍含 fake_state），适配段会跳过，此时本门控照旧阻断。
 GUIDE
   exit 1
 fi
@@ -150,20 +153,20 @@ GATE='# susfs build gate (replaces the unconditional upstream suspension 48fa4bb
 # checked against the same markers upstream named before the pause:
 #   <  6.6: manual hook (ksu_selinux_hide_running) without should_check_current
 #           means a stale (detectable) susfs: require an update;
-#   >= 6.6: susfs without security_context_to_sid_with_policy would panic at
-#           runtime: require an update.
+#   >= 6.6: susfs without security_context_to_sid_with_policy / backup_sepolicy
+#           would panic at runtime: require an update.
 KSU_COMPAT_KVER_LT66 := $(shell awk '"'"'$$1=="VERSION" { v = $$3 } $$1=="PATCHLEVEL" { p = $$3 } END { if (v < 6 || (v == 6 && p < 6)) print "yes" }'"'"' $(srctree)/Makefile)
 
 ifeq ($(KSU_COMPAT_KVER_LT66),yes)
 ifneq ($(shell grep -q "ksu_selinux_hide_running" $(srctree)/security/selinux/hooks.c; echo $$?),0)
 # no manual hook: KernelSU falls back to its own auto hook, safe to build
-else ifeq ($(shell grep -c "should_check_current" $(srctree)/security/selinux/hooks.c),0)
+else ifeq ($(shell grep -c -e "should_check_current" -e "backup_sepolicy" $(srctree)/security/selinux/hooks.c),0)
 $(info -- $(REPO_NAME): susfs selinux_hide lacks the should_check_current side-channel fix)
 $(info -- $(REPO_NAME): Please wait simonpunk update)
 $(error Please wait susfs update.)
 endif
 else
-ifeq ($(shell grep -c "security_context_to_sid_with_policy" $(srctree)/security/selinux/selinuxfs.c),0)
+ifeq ($(shell grep -c -e "security_context_to_sid_with_policy" -e "backup_sepolicy" $(srctree)/security/selinux/selinuxfs.c),0)
 $(info -- $(REPO_NAME): susfs lacks the security_context_to_sid_with_policy model)
 $(info -- $(REPO_NAME): Please wait simonpunk update)
 $(error Please wait susfs update.)

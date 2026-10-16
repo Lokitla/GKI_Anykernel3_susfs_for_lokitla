@@ -471,6 +471,106 @@ if [ "$SUSFS_REJ_COUNT" -gt 0 ]; then
 fi
 
 verify_susfs_landing
+# ---------------------------------------------------------------------------
+# FinaSU/BakaSU 新 selinux_hide 模型适配：fake_state -> backup_sepolicy
+#
+# BakaSU（d7260ca1 起）把 fake_state 换成了自有的 struct selinux_policy
+# *backup_sepolicy 与 security_*_with_policy() 系列（kernel/feature/selinux_hide.c），
+# 而 SUSFS 主补丁仍按旧模型声明 extern struct selinux_state fake_state，
+# 链接期必然 undefined symbol: fake_state。这里按新模型改写补丁落地的引用。
+#
+# 触发条件（三条同时成立才适配，否则原样放行）：
+#   1) KernelSU/kernel/feature/selinux_hide.c 存在；
+#   2) 该文件不含 fake_state（上游已切到 backup_sepolicy 新模型）；
+#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c} 里含 &fake_state。
+#
+# 定位思路参考 LingLuo17/GKI_KernelSU_SUSFS（GPL-2.0）与 BakaSU
+# kernel/feature/selinux_hide.c 的调用范例；本实现按本仓库的失败处理约定重写，
+# 未复制其代码：每个待替换串必须恰好命中一次，替换后残留 fake_state 即报错退出。
+adapt_finasu_selinux_hide_model() {
+  local hide_c="$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"
+  local hooks_c="security/selinux/hooks.c"
+  local selinuxfs_c="security/selinux/selinuxfs.c"
+
+  if [ ! -f "$hide_c" ]; then
+    echo "SELinux 模型适配：无 KernelSU/kernel/feature/selinux_hide.c，跳过"
+    return 0
+  fi
+  if grep -q "fake_state" "$hide_c"; then
+    echo "SELinux 模型适配：上游 selinux_hide.c 仍是 fake_state 旧模型，跳过"
+    return 0
+  fi
+  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null; then
+    echo "SELinux 模型适配：源码树未引用 fake_state，跳过"
+    return 0
+  fi
+
+  echo "SELinux 模型适配：BakaSU 新 selinux_hide 模型，改写 SUSFS 补丁的 fake_state 引用"
+  local PY=""
+  local cand
+  for cand in python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+  done
+  if [ -z "$PY" ]; then
+    echo "::error title=SELinux 模型适配::既无 python3 也无 python，无法改写 fake_state 引用"
+    return 1
+  fi
+
+  "$PY" - "$hooks_c" "$selinuxfs_c" <<'PY'
+import io
+import sys
+
+DECL = (
+    "extern struct selinux_policy *backup_sepolicy;\n"
+    "extern int security_context_to_sid_with_policy(struct selinux_policy *policy, const char *scontext, u32 scontext_len, u32 *sid, u32 def_sid, gfp_t gfp_flags, u32 *orig_sid_p, int *orig_rc_p);\n"
+    "extern int security_sid_to_context_with_policy(struct selinux_policy *policy, u32 sid, char **scontext, u32 *scontext_len);\n"
+    "extern void security_compute_av_user_with_policy(struct selinux_policy *policy, u32 ssid, u32 tsid, u16 tclass, struct av_decision *avd);"
+)
+
+TOSID = "security_context_to_sid_with_policy(backup_sepolicy, %s, %s, %s, SECSID_NULL, GFP_KERNEL, NULL, NULL)"
+
+RULES = [
+    ("extern struct selinux_state fake_state;", DECL),
+    ("security_context_to_sid(&fake_state, buf, size, &sid, GFP_KERNEL)", TOSID % ("buf", "size", "&sid")),
+    ("security_context_to_sid(&fake_state, value, size, &tmp_sid, GFP_KERNEL)", TOSID % ("value", "size", "&tmp_sid")),
+    ("security_sid_to_context(&fake_state, sid, &canon, &len)", "security_sid_to_context_with_policy(backup_sepolicy, sid, &canon, &len)"),
+    ("security_context_str_to_sid(&fake_state, scon, &ssid, GFP_KERNEL)", TOSID % ("scon", "strlen(scon)", "&ssid")),
+    ("security_context_str_to_sid(&fake_state, tcon, &tsid, GFP_KERNEL)", TOSID % ("tcon", "strlen(tcon)", "&tsid")),
+    ("security_compute_av_user(&fake_state, ssid, tsid, tclass, &avd)", "security_compute_av_user_with_policy(backup_sepolicy, ssid, tsid, tclass, &avd)"),
+]
+
+replaced = 0
+for path in sys.argv[1:]:
+    with io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        src = fh.read()
+    out = src
+    for old, new in RULES:
+        hits = out.count(old)
+        if hits == 0:
+            continue
+        if hits != 1:
+            print("::error title=SELinux 模型适配::" + path + " 中待替换串出现 %d 次（期望 1 次）：" % hits + old)
+            sys.exit(1)
+        out = out.replace(old, new)
+        replaced += 1
+    with io.open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        fh.write(out)
+
+leftover = []
+for path in sys.argv[1:]:
+    with io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        if "fake_state" in fh.read():
+            leftover.append(path)
+
+if leftover:
+    print("::error title=SELinux 模型适配::改写后仍有 fake_state 残留：" + " ".join(leftover))
+    sys.exit(1)
+
+print("SELinux 模型适配：完成 " + str(replaced) + " 处改写，无 fake_state 残留")
+PY
+}
+
+adapt_finasu_selinux_hide_model
 
 # 还原仅用于补丁匹配的临时源码调整
 if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
