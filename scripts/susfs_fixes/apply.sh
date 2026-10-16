@@ -346,6 +346,86 @@ fix_statfs_susfs_decl
 # 同 fix_statfs_susfs_decl：实现已提升到「原始补丁探测」段，这里只调用。
 fix_show_smap_sus_map
 
+# 从补丁里取出它针对某个目标文件「新增」的代码行（去行首 +，排除 +++ 文件头），去重后输出。
+# 输出保留原始缩进：补丁是按行逐字节插入的，只有「整行（含缩进）完全相同」才算真的落进去了。
+# 去缩进后再比会把「A 行是 B 行的子串」算成命中 —— 实测（android12-5.10 主补丁：
+# 只把候选行的前 1/4 拼进基线）会拿到 50%~58% 的假高分，把没打完的补丁判成通过，属漏报。
+# 长度过滤按去缩进后的字符数算（>= 15），避免把 "}"、"#endif" 这类行算进分母。
+patch_added_lines_for() {
+  local patch="$1" target="$2"
+  # CR 用 -v 传进去再当正则用：awk 正则字面量里的 \r 不可移植
+  # （mawk 会把它当成字母 r），而变量里的真 \r 一定匹配自身。
+  awk -v target="$target" -v CR="$(printf '\r')" '
+    /^diff --git / { cur = ""; next }
+    /^\+\+\+ / {
+      cur = substr($0, 7)
+      sub(CR "$", "", cur)
+      sub(/[ \t].*$/, "", cur)
+      next
+    }
+    cur != target { next }
+    /^\+\+\+/ { next }
+    /^\+/ {
+      line = substr($0, 2)
+      sub(CR "$", "", line)
+      probe = line
+      sub(/^[ \t]+/, "", probe)
+      sub(/[ \t]+$/, "", probe)
+      if (length(probe) >= 15) print line
+    }
+  ' "$patch" | LC_ALL=C sort -u
+}
+
+# 核对补丁对某个文件的新增代码行是否真的落到源码树里。
+# 判据来源＝补丁自身，证据来源＝源码树，两者是不同产物，因此不是「写什么就 grep 什么」
+# 的同义反复；上游改名、换 SELinux 模型、换注入方式时判据自动跟随补丁更新，
+# 不会像写死的 my_setprocattr / my_sel_open_handle_status 那样腐烂成假阳性。
+# 判别力实测（android12-5.10 主补丁 vs AOSP 未打补丁基线）：命中 0 条。
+# 阈值取一半：全部应用时应为 100%，低于 50% 说明 hunk 被跳过、SELinux 隐藏没进去。
+verify_susfs_landing_file() {
+  local target="$1" srcfile="$2" label="$3"
+  if [ ! -f "$srcfile" ]; then
+    echo "::error title=SUSFS 未完整落地::${label} 不存在（$srcfile），补丁对它的注入无处可落"
+    return 1
+  fi
+  if [ ! -f "$SUSFS_PATCH" ]; then
+    echo "::error title=SUSFS 未完整落地::判据补丁 $SUSFS_PATCH 不在当前目录（$(pwd)），无法核对 ${label} 的新增代码是否落地"
+    return 1
+  fi
+
+  local total=0 matched=0 line
+  # 比对前把源码树的 CR 去掉：候选行已统一去掉行尾 CR，若补丁以 CRLF 形态被 patch 应用，
+  # 树里插入的行会带 \r，直接 -x 比对会全数落空 → 把完好的构建误判成失败（假阳性）。
+  local srccmp
+  srccmp="$(mktemp)"
+  tr -d '\r' < "$srcfile" > "$srccmp"
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    total=$((total + 1))
+    # -x 整行比对（含缩进），-F 走字面量避免补丁代码里的正则元字符被解释；
+    # 不用管道所以没有 pipefail + SIGPIPE 的假阳性。
+    if grep -qxF -- "$line" "$srccmp" 2>/dev/null; then
+      matched=$((matched + 1))
+    fi
+  done < <(patch_added_lines_for "$SUSFS_PATCH" "$target")
+  rm -f "$srccmp"
+
+  # 补丁对该文件没有新增行（只改上下文/只删行）时无从判定，不误报
+  if [ "$total" -eq 0 ]; then
+    return 0
+  fi
+
+  local pct=$((matched * 100 / total))
+  if [ "$pct" -lt 50 ]; then
+    echo "::error title=SUSFS 未完整落地::${label} 仅 ${matched}/${total} 行（${pct}%）新增代码进入源码树，SELinux 隐藏未完整生效"
+    echo "::error::判据取自补丁自身对 $target 的新增行，全部应用时应为 100%"
+    return 1
+  fi
+  echo "${label} 落地校验通过：补丁新增代码 ${matched}/${total} 行（${pct}%）已在源码树"
+  return 0
+}
+
 # patch 退出码 1 也可能只是「部分 hunk 被跳过」而不留 .rej，所以不能只看返回值，
 # 必须核对产物：SUSFS 是否真的进了编译、SELinux 钩子是否真的注入
 verify_susfs_landing() {
@@ -356,22 +436,24 @@ verify_susfs_landing() {
   [ -f fs/susfs.c ] \
     || missing+=("fs/susfs.c 不存在，SUSFS 源文件未落地")
 
-  # 只在补丁确实要改这些文件时校验，避免补丁改版后误报
-  if grep -q 'b/security/selinux/hooks\.c' "$SUSFS_PATCH" 2>/dev/null \
-    && ! grep -q 'my_setprocattr' security/selinux/hooks.c 2>/dev/null; then
-    missing+=("security/selinux/hooks.c 未注入 my_setprocattr，SELinux 隐藏不会生效")
-  fi
-  if grep -q 'b/security/selinux/selinuxfs\.c' "$SUSFS_PATCH" 2>/dev/null \
-    && ! grep -qE 'my_sel_open_handle_status|my_write_access|my_write_context' security/selinux/selinuxfs.c 2>/dev/null; then
-    missing+=("security/selinux/selinuxfs.c 未注入 status/access/context 钩子，/sys/fs/selinux 会泄漏真实上下文")
-  fi
-
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "::error title=SUSFS 未完整落地::检测到 ${#missing[@]} 处缺失，内核会假装正常但 SUSFS 实际不生效"
     printf '  - %s\n' "${missing[@]}"
     exit 1
   fi
-  echo "SUSFS 落地校验通过：susfs.o 已进编译、SELinux 钩子已注入"
+
+  # 只在补丁确实要改该文件时才校验，避免补丁改版后误报。
+  # 判据不写死符号名：旧版这里查 my_setprocattr / my_sel_open_handle_status，
+  # 而 5.10 的补丁早已换成 ksu_selinux_hide_running、should_check_current、
+  # fake_state 这套新模型，写死的名字必然查不到 → 假阳性把正常构建判死。
+  # 现在改成「补丁对该文件的新增代码行是否真的进了源码树」。
+  local target
+  for target in security/selinux/hooks.c security/selinux/selinuxfs.c; do
+    grep -qF "b/$target" "$SUSFS_PATCH" 2>/dev/null || continue
+    verify_susfs_landing_file "$target" "$target" "$(basename "$target")" || exit 1
+  done
+
+  echo "SUSFS 落地校验通过：susfs.o 已进编译、SELinux 补丁新增代码已进入源码树"
 }
 
 # 在编译前核对 SUSFS 主补丁的冲突文件，上游自带的 .rej 不计入

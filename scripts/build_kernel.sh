@@ -1844,7 +1844,14 @@ stage_apply_susfs() {
   # 拿到的就不是"原始补丁能否落地"的结论。apply.sh 打完原始补丁会写出
   # $SUSFS_PROBE_DIR/apply.json 并直接结束；编译结论再由 build.yml 末尾的
   # 「写入 SUSFS 探测结果」步骤合并成 result.json。
-  bash "$WORKSPACE/scripts/susfs_fixes/apply.sh"
+  # apply.sh 的 exit 1 必须在这里上抛：主循环用 `if ! "run_${p}"` 调用阶段，
+  # 该上下文下 bash 会关闭函数体内的 set -e，所以 apply.sh 自己 exit 1 并不会
+  # 中止构建（2026-10 首次 BBG 构建实测：verify_susfs_landing 报了 2 处缺失，
+  # 构建仍一路跑到 zram 阶段才因别的原因失败）。不打草稿地放行等于 fail-open。
+  if ! bash "$WORKSPACE/scripts/susfs_fixes/apply.sh"; then
+    cd "$_pwd"
+    return 1
+  fi
   cd "$_pwd"
 
   # 补丁落地后立刻核对 Kconfig：只查 .rej 和源码注入还不够，
@@ -2521,15 +2528,41 @@ stage_setup_zram_lz4() {
       cd "$_pwd"; return 1
     fi
 
-    # 落地断言：补丁声称新增的实现文件必须真的存在。上面那一步只证明 patch 认为
-    # 它打了，这一步证明源码树里确实有东西——上游改文件名/挪目录时这里会响。
-    local -a missing=()
-    for f in include/linux/lz4kd.h lib/lz4kd.c crypto/lz4k_compress.c; do
-      [ -f "$f" ] || missing+=("$f")
+    # 落地断言：上面四个 cp 把上游源码树拷进内核树，这里逐一核对「拷进去的东西真的
+    # 在目标位置」。判据不从脚本里写死文件名，而是**拿源目录当清单**：源目录里有什么，
+    # 目标就必须有什么——上游改文件名/挪目录时两者同步变化，不会误杀。
+    #
+    # （曾经写死过 lib/lz4kd.c / crypto/lz4k_compress.c：上游真实布局是 lib/lz4kd/ 与
+    #   crypto/lz4kd.c，这两个路径根本不存在，断言必然失败、必然阻断每一次 zram 构建。
+    #   写死的名字一旦随上游布局变化，就从「护栏」变成「永久假断言」。）
+    local -a lz4k_src_dst=(
+      "$SUKISU_PATCHES/other/zram/lz4k/include/linux:./include/linux"
+      "$SUKISU_PATCHES/other/zram/lz4k/lib:./lib"
+      "$SUKISU_PATCHES/other/zram/lz4k/crypto:./crypto"
+      "$SUKISU_PATCHES/other/zram/lz4k_oplus:./lib"
+    )
+    local pair src dst rel checked=0 missing=""
+    for pair in "${lz4k_src_dst[@]}"; do
+      src="${pair%%:*}"
+      dst="${pair##*:}"
+      while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        checked=$((checked + 1))
+        if [ ! -e "$dst/$rel" ]; then
+          missing="$dst/$rel（来源 $src/$rel）"
+          break 2
+        fi
+      done < <(cd "$src" 2>/dev/null && find . -mindepth 1 | sed 's|^\./||' | sort)
     done
-    if [ "${#missing[@]}" -gt 0 ]; then
-      echo "::error title=zram 补丁栈落地文件缺失::补丁栈声称已应用，但以下文件不在源码树: ${missing[*]}"
-      echo "::error::上游 lz4k 补丁栈的文件布局可能已变；ZRAM_LZ4K_OK 保持 0，不写入 CONFIG_CRYPTO_LZ4K*"
+    if [ "$checked" -eq 0 ]; then
+      echo "::error title=zram 补丁栈落地校验失效::四个上游源码目录里一个文件都没枚举到，落地校验会变成空检查"
+      echo "::error::上游 lz4k 源码资源目录结构已变，或 zram_lz4k_available 的判定与拷贝路径不再一致"
+      cd "$_pwd"; return 1
+    fi
+    if [ -n "$missing" ]; then
+      echo "::error title=zram 补丁栈落地文件缺失::上游源码树里的文件没有拷进内核树: $missing"
+      echo "::error::已核对 $checked 个上游文件；上游 lz4k 补丁栈的目录布局可能已变"
+      echo "::error::ZRAM_LZ4K_OK 保持 0，不写入 CONFIG_CRYPTO_LZ4K*"
       cd "$_pwd"; return 1
     fi
 
