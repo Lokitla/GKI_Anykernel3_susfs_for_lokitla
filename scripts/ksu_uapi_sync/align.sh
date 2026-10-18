@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 来源：对照实现见 LingLuo17/AnyKernel3 的 b2f2598c（UAPI 2→5）与 1bb9d909；
+#       本文件按本仓库的构建流程与失败处理约定自行实现，未复制其代码。
+
 # SukiSU 内核侧 UAPI 对齐：把内核检出里的 KERNEL_SU_UAPI_VERSION（以及 UAPI 4
 # 引入的 KSU_GET_INFO_FLAG_BUNDLED 常量）对齐到官方管理器构建所用的值。
 #

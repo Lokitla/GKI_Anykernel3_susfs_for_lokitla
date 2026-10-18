@@ -37,6 +37,32 @@
 
 FinaSU 仓库标记 GPL-3.0。许可是否与实际构建组合兼容，应以本次使用的具体文件、commit 和许可文本核查结果为准；本说明不把整个仓库或内核产物统一标为 GPL-3.0。
 
+## BakaSU 构建支持与来源
+
+BakaSU 自上游 `48fa4bb` 起在 `kernel/tools/susfs_compat.mk` 末尾保留无条件的 `$(error Please wait susfs update.)`，主动暂停 SUSFS 构建。本仓库不解锁该文件，而是**按树内证据逐版本判定是否放行**。
+
+- [`resume_susfs.sh`](https://github.com/LingLuo17/AnyKernel3/blob/6db3a675/scripts/bakasu_compat/resume_susfs.sh)：GPL-3.0。移植自 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3) 的 commit `6db3a675`，本仓库按自己的目录布局与「编译前 fail-fast」风格重写，语义一致但更早失败（判定在 `apply_susfs` 之后、编译之前）。
+  与原实现的差别：上游允许无条件放行，本仓库只把「无条件的 `$(error)`」换成「有依据的判定」，判定不成立时照旧阻断（fail-closed），避免产出上游刻意规避的可检测内核。
+
+
+## 本仓库文件的许可归属总表
+
+仓库内每个脚本文件头部都有 `SPDX-License-Identifier` 行。按来源分为三类：
+
+| 类别 | 文件 | 许可 |
+|---|---|---|
+| **① 移植自上游，保留上游许可** | `scripts/bakasu_compat/resume_susfs.sh` | `GPL-3.0-only`（源自 LingLuo17/AnyKernel3 `6db3a675`） |
+| | `scripts/finasu_compat/apply.sh` | `GPL-3.0-only`（源自 LingLuo17/AnyKernel3 `d6255c5f4`） |
+| | `scripts/finasu_compat/extract_manager_cert.py` | `GPL-3.0-only`（源自 LingLuo17/AnyKernel3 `fb8379aa7`） |
+| **② 本仓库自维护** | `scripts/build_kernel.sh`、`scripts/check_upstream_susfs.sh`、`scripts/get_manager.sh`、`scripts/ksu_uapi_sync/align.sh`、`scripts/sukisu_compat/apply.sh`、`scripts/susfs_fixes/apply.sh`、`scripts/susfs_probe/*.py`、`scripts/tools/pin_kpm_patch.sh`、`tools/*.py`、`zram/apply_lz4_neon.sh` | `GPL-2.0-or-later` |
+| **③ 一次性迁移留档（不参与构建）** | `tools/migration/*.py` | `GPL-2.0-or-later`，仅作过程留档，见该目录 README |
+
+注意：
+
+- 上述 SPDX 行描述的是**本仓库该文件自身的许可**，不代表整个仓库或内核产物只有一种许可——内核对部分受 GPL-2.0-only 约束，上游补丁可能另有许可（见上节）。
+- `apply.sh` 的引用实现参考了 LingLuo17/AnyKernel3，但 `align.sh` 只在注释中标注**对照实现**，代码由本仓库自行编写，因此按 ② 处理。
+- 移植文件（①）在分发时需同时提供对应上游源码与许可证文本；GPL-3.0 全文见 [`LICENSE-GPL-3.0.txt`](LICENSE-GPL-3.0.txt)。
+
 ## 许可风险组件细节
 
 ### `Numbersf/Action-Build` Unicode 补丁

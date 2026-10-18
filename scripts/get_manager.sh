@@ -1,3 +1,11 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 管理器与管理器工件下载逻辑（由 .github/workflows/get-manager.yml 调用）。
+#
+# 说明：本文件是从 get-manager.yml 的内联 `run:` 脚本原样抽出的，目的是绕开
+#       GitHub Actions 对 `${{ }}` 表达式长度的限制（见上游 commit 0b25bd1
+#       「keep manager workflow expressions within limit」）。逻辑本身由本仓库维护，
+#       不来自第三方；管理器 APK 的来源见 NOTICE 中的对应变体条目。
 case "$KSU_VARIANT" in
   "SukiSU(40726)") LEGACY_RELEASE_TAG="v2.1.0-r2"; LEGACY_DIR="SukiSU_40726" ;;
   "SukiSU(40548)") LEGACY_RELEASE_TAG="v2.0.0-r34"; LEGACY_DIR="SukiSU_40548" ;;

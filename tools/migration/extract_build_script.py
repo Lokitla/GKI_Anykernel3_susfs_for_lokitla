@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 一次性迁移留档（不参与构建）。见同目录 README.md；请勿在新改动中复用。
 #!/usr/bin/env python3
 """生成 scripts/build_kernel.sh —— YAML 与 Python CLI 共用的单一构建真相源。"""
 import re

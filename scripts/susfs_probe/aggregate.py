@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 本仓库自有的 SUSFS 原始补丁探测工具（不来自第三方），用于汇总上游补丁在各内核上的兼容性。
 """汇总各构建任务的 SUSFS 原始补丁探测结论。
 
 用法：python3 aggregate.py <download-artifact 目录> <输出目录>

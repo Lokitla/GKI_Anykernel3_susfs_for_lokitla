@@ -60,7 +60,8 @@
 
 可选功能由工作流输入或本地 CLI 参数控制；不同构建入口提供的选项略有差异，详细参数以 [本地构建文档](docs/local-build.md) 和对应 workflow 为准。
 
-- KernelSU 变体：SukiSU、BakaSU、FinaSU、Official、Next，以及保留的旧版 SukiSU 构建。
+- KernelSU 变体：SukiSU、SukiSU(40726)、SukiSU(40548)、BakaSU、FinaSU、Official、Next，以及保留的旧版 SukiSU 构建。
+  注意：`main.yml` 不提供 Next（该入口面向稳定矩阵）；需要 Next 请用 `kernel-custom.yml` 或对应 Android 版本入口。
   三个主力变体（SukiSU / BakaSU / FinaSU）的 SUSFS 集成路径不同，选型见下面的【变体与 SUSFS】。
 - SUSFS 集成与补丁适配；可按需导出补丁。
 - ZRAM/LZ4KD 优化；6.12 使用本仓库维护的补丁。
@@ -68,7 +69,15 @@
 - AnyKernel3 刷机包；完整产物模式还会生成不同压缩格式的 boot 镜像。
 - 构建失败日志、拒绝补丁汇总和 Actions 摘要。
 
-**兼容性提示：** KPM 在 Linux 6.10 及以上会自动跳过；6.12 构建请按需开启 ZRAM。部分设备 ROM 或内核配置可能不兼容，请先查看功能文档和对应构建记录。
+**兼容性提示：**
+
+- **KPM 的实际可用范围比「版本号」窄**，三点必须同时满足：
+  1. 变体提供 KPM —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）；BakaSU / FinaSU / Official / Next 的 KernelSU 里没有 `config KPM`，请求了也会被跳过；
+  2. 内核 ≤ 6.6 —— **6.10+ 自动关闭**（`kpm/super_access.c` 用了新内核已移除的 `netlink_kernel_cfg.cb_mutex`）；
+  3. 内核 ≠ 6.6 —— **6.6 是特例**：构建脚本会写入 `CONFIG_KPM=y`，但跳过 Image 修补，模块实际加载不了，日志会打印「6.6 内核不支持 KPM 镜像修补」。
+
+  因此当前**真正能加载 KPM 的是 SukiSU 系 + 内核 ≤ 6.1**。
+- 6.12 构建请按需开启 ZRAM。部分设备 ROM 或内核配置可能不兼容，请先查看功能文档和对应构建记录。
 
 ## 变体与 SUSFS
 
@@ -76,16 +85,18 @@
 
 | 变体 | SUSFS 集成方式 | 管理器来源 | 注意事项 |
 |---|---|---|---|
-| **SukiSU** | 上游 KernelSU 内置 SUSFS 支持，本仓库只做 UAPI 对齐与上下文适配 | [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) Actions 产物 | 开启 SUSFS 时自动选 `builtin` 分支；`main` 分支与 SUSFS 冲突，需显式解锁才放行 |
+| **SukiSU** | 上游 KernelSU 内置 SUSFS 支持，本仓库只做 UAPI 对齐与上下文适配 | [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) Actions 产物 | 开启 SUSFS 时自动选 `builtin`；`main` 分支与 SUSFS 冲突（`main` 用 `ksu_patch_text` 运行时改写，SUSFS 补丁用 `my_*` 替换，两者互踩），会**两道防线**拦住：①`ALLOW_SUSFS_WITH_MAIN=1` 才放行这条；②补丁落地后还会 grep `ksu_patch_text` 再拦一次。注意 CI 入口未暴露该变量，actions 上只能走 `builtin` |
 | **BakaSU** | 上游 KernelSU 内置 SUSFS 支持，但上游对 SUSFS 构建**主动挂起**，本仓库按树内证据逐版本判定放行 | [BakaSU](https://github.com/Baka-SU/BakaSU) Actions 产物 | 上游 `susfs_compat.mk` 仍带无条件 `$(error)`；支持情况由 [`scripts/bakasu_compat/resume_susfs.sh`](scripts/bakasu_compat/resume_susfs.sh) 在补丁落地后判定，不通过即中止 |
 | **FinaSU** | 走**上游 KernelSU 侧 SUSFS 补丁 + 本仓库结构适配补丁**（`scripts/finasu_compat/`），与上两者形态不同 | [FinaSU](https://github.com/LyraVoid/FinaSU) 官方 Release APK | 内核与管理器必须对齐同一 Release：构建时克隆 FinaSU 并检出该 Release 对应提交，同时把管理器 APK 的签名证书写入内核信任列表，否则管理器无法识别内核 |
 | **Official / Next** | 无内置 SUSFS；Official 需额外打上游 `10_enable_susfs_for_ksu.patch` | [KernelSU](https://github.com/tiann/KernelSU) / [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) | Next 的 `dev` 分支未提供 `KSU_SUSFS_*` 开关，不能同时开启 SUSFS |
 
 补充说明：
 
-- **SUSFS 补丁源**：BakaSU / SukiSU 默认从 [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) 的 `gki-<android>-<kernel>` 分支克隆；SukiSU 会优先尝试 ShirkNeko 的 fork，分支不存在时回落到原版。分支永远跟随上游最新，不钉提交（需要时可显式指定 `susfs_commit`）。
+- **SUSFS 补丁源**：BakaSU / SukiSU 默认从 [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) 的 `gki-<android>-<kernel>` 分支克隆；SukiSU 会优先尝试 ShirkNeko 的 fork，分支不存在时回落到原版。
+  主流变体跟随分支头、不钉提交；但**旧版变体（`SukiSU(40726)` / `SukiSU(40548)`）是例外**：它们按各自 `config/legacy_*` 里记录的固定提交检出，既不试 ShirkNeko 也不跟分支头——旧变体本就依赖特定提交才能编过。
+  需要在新变体上复现历史构建时，可在入口的「提交 hash」第 2 段填 SUSFS 提交（Actions 界面没有单独的 `susfs_commit` 输入框）。
 - **BakaSU 的挂起不是本仓库造成的**：上游自 `48fa4bb` 起主动停用 SUSFS 构建，等待 simonpunk 同步新的 `selinux_hide` 模型。本仓库不无条件放行，而是核对补丁落地后的真实形态（< 6.6 看 `hooks.c` 的手动钩子与 `should_check_current`，≥ 6.6 看 `selinuxfs.c` 的 `_with_policy` 模型；也可能命中 `backup_sepolicy` 新形态），判定不通过就明确失败，避免产出上游刻意规避的可检测内核。
-- **FinaSU 与 BakaSU/SukiSU 的 SELinux 模型不同**：FinaSU 上游已移除 `fake_state`，改用 `backup_sepolicy` + `security_*_with_policy`。SUSFS 主补丁仍按旧模型引用 `fake_state`，因此本仓库在补丁落地后会自动改写这些引用（[`scripts/susfs_fixes/apply.sh`](scripts/susfs_fixes/apply.sh) 的 `adapt_finasu_selinux_hide_model`）；改写不成功（待替换串不是恰好命中一次、或仍有残留）一律中止构建。
+- **BakaSU / FinaSU 的 SELinux 模型与旧式 SUSFS 不同**：BakaSU（`d7260ca1` 起）与 FinaSU 上游都已移除 `fake_state`，改用 `backup_sepolicy` + `security_*_with_policy`；而 SUSFS 主补丁仍按旧模型 `extern` 引用 `fake_state`，直接编译会在 ThinLTO 链接期报 `undefined symbol: fake_state`。本仓库在补丁落地后自动改写这些引用（**对 BakaSU 与 FinaSU 都生效**，判据是 `selinux_hide.c` 里已无 `fake_state`）（[`scripts/susfs_fixes/apply.sh`](scripts/susfs_fixes/apply.sh) 的 `adapt_finasu_selinux_hide_model`）；改写不成功（待替换串不是恰好命中一次、或仍有残留）一律中止构建。
 - **FinaSU 的内核侧集成脚本来自 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)**：`scripts/finasu_compat/apply.sh` 移植自该仓库 commit `d6255c5f44e3871743c7d1570436822227b4b2fd`（GPL-3.0-only），`extract_manager_cert.py` 移植自 commit `fb8379aa781f9e94cabee2c12f543144035b5da3`。这两处的来源、许可与改动说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - **自动触发覆盖范围**：`Auto_Trigger_BakaSU.yml` 与 `Auto_Trigger_SukiSU.yml` 只跟踪这两个变体的上游更新；FinaSU 目前需手动触发构建。
 

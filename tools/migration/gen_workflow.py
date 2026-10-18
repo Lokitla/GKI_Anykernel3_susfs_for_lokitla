@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 一次性迁移留档（不参与构建）。见同目录 README.md；请勿在新改动中复用。
 #!/usr/bin/env python3
 """生成融合后的 build.yml：保留 Actions 专属能力，核心构建委托给 build_kernel.sh。"""
 import yaml

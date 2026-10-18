@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 本仓库自有的 SUSFS 原始补丁探测工具（不来自第三方），用于汇总上游补丁在各内核上的兼容性。
 """把 aggregate.py 的 summary.json 拆成 dev 上的 data/susfs_probe/<android>-<kernel>.json。
 
 用法：python3 split_summary.py <summary.json> <输出目录> [--force]

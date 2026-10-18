@@ -123,9 +123,16 @@ python3 build.py --android android14 --kernel 6.1 --from patch_kpm_image
 ## 注意事项
 
 - **「清理磁盘空间」只在 GitHub Actions runner 上执行**，本地构建会自动跳过，以免误删你机器上的文件。
-- `--kpm` 在内核 ≥ 6.10 时会被脚本强制关闭（`KPM_SUPPORTED=0`：KPM 代码用了新内核已移除的
-  `netlink_kernel_cfg.cb_mutex`）；支持范围为 **6.6 及以下**。
-- 各开关的默认值与 Actions 保持一致：ZRAM 默认**开启**，其余可选功能默认关闭。
+- `--kpm` 的实际可用范围由三件事同时决定，比版本号更窄：
+  1. **变体必须提供 KPM** —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）；
+     BakaSU / FinaSU / Official / Next 的 KernelSU 没有 `config KPM`，请求了也会被跳过。
+  2. **内核 ≤ 6.6** —— 6.10+ 会被强制关闭（`KPM_SUPPORTED=0`：KPM 代码用了新内核已移除的
+     `netlink_kernel_cfg.cb_mutex`）。
+  3. **内核 ≠ 6.6** —— 6.6 是特例：脚本仍会写 `CONFIG_KPM=y`，但**跳过 Image 修补**
+     （日志打印「6.6 内核不支持 KPM 镜像修补」），模块实际加载不了。
+
+  结论：当前真正能加载 KPM 的组合是 **SukiSU 系 + 内核 ≤ 6.1**。
+- 各开关默认值以**入口 workflow 的 `inputs` 为准**，不同入口并不一致：`kernel-custom.yml` / `kernel-a12`~`a15` 的 `use_zram` 默认开启，但 `kernel-a16-6-12.yml` 默认关闭；`use_kpm` 在多数入口默认 `patched (开启并修补)`。命令行未传时按 `build.py` 自身的默认值。
 
 ---
 

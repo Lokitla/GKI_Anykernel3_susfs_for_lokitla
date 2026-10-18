@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 # 用途：解除上游 BakaSU 在 kernel/tools/susfs_compat.mk 末尾追加的**无条件**
 #       $(error Please wait susfs update.)，把它换成「按内核版本 + 树内实际形态」
 #       的精确门控。不钉上游 commit：上游解除挂起后本脚本自动 no-op。

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 本仓库自有的发布辅助脚本（非构建链路）。
 #!/usr/bin/env python3
 """用 Contents API 把单个文件从本地提交推到远端分支（绕开 git push）。
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 本仓库维护的 LZ4 NEON 条件编译补丁脚本（三仓融合时并入，替代原先 4 个版本特定 patch）。
+# 二进制/源码资源 zram/lz4 与 zram/include 的来源与许可见 NOTICE。
 #!/bin/bash
 # ================================================================
 # apply_lz4_neon.sh
