@@ -27,12 +27,13 @@
 
 本仓库的 FinaSU 工作流从 [LyraVoid/FinaSU](https://github.com/LyraVoid/FinaSU) 最新 Release 获取官方 APK，并把内核源码固定到同一 Release tag 对应的 commit。发布说明中的 commit 链接用于定位 APK 对应源码；分发 FinaSU APK 时应同时提供该源码及 GPL-3.0 许可信息。
 
-以下实现移植并按本仓库构建流程适配自 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3/tree/fb8379aa781f9e94cabee2c12f543144035b5da3/scripts/finasu_compat)（上游 `dev` commit `fb8379aa781f9e94cabee2c12f543144035b5da3`）：
+以下实现移植并按其许可证 GPL-3.0-only 使用，来源仓库为 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)（GitHub 全称 `LingLuo17/AnyKernel3`，许可证 SPDX：`GPL-3.0`）。
 
-- [`extract_manager_cert.py`](https://github.com/LingLuo17/AnyKernel3/blob/fb8379aa781f9e94cabee2c12f543144035b5da3/scripts/finasu_compat/extract_manager_cert.py)：从 APK 签名块提取官方证书信息，GPL-3.0-only。
-- [`susfs_drift_fixes.patch`](https://github.com/LingLuo17/AnyKernel3/blob/fb8379aa781f9e94cabee2c12f543144035b5da3/scripts/finasu_compat/susfs_drift_fixes.patch)：将 SUSFS 适配到 FinaSU 内核目录结构。该补丁按上游版本保留，未单独加入本仓库 SPDX 行。
-- [`apply.sh`](https://github.com/LingLuo17/AnyKernel3/blob/fb8379aa781f9e94cabee2c12f543144035b5da3/scripts/finasu_compat/apply.sh)：执行上游 SUSFS 补丁和结构适配补丁，GPL-3.0-only。
-- [`LICENSE-GPL-3.0.txt`](LICENSE-GPL-3.0.txt)：随上述移植文件附带的 GPL-3.0 许可证文本，取自同一上游 commit 的 `LICENSE`。
+- [`extract_manager_cert.py`](https://github.com/LingLuo17/AnyKernel3/blob/fb8379aa781f9e94cabee2c12f543144035b5da3/scripts/finasu_compat/extract_manager_cert.py)：从 APK 签名块提取官方证书信息，GPL-3.0-only。移植自上游 commit `fb8379aa781f9e94cabee2c12f543144035b5da3`。
+- [`apply.sh`](https://github.com/LingLuo17/AnyKernel3/blob/d6255c5f44e3871743c7d1570436822227b4b2fd/scripts/finasu_compat/apply.sh)：FinaSU 内核侧 SUSFS 集成 —— 以 `patch -p1 --forward` 应用 susfs4ksu 的 `10_enable_susfs_for_ksu.patch`（允许部分 hunk 失败），再按补丁本意对结构漂移点做内联修复，GPL-3.0-only。移植自上游 commit `d6255c5f44e3871743c7d1570436822227b4b2fd`（2026-10-17，"fix(finasu): restore arch syscall_hook objects for preinit ksu_syscall_table reference"）。本仓库在上游基础上补强了失败处理：上游用 `|| true` 静默吞掉补丁失败，本仓库改为 `patch` 退出码 ≥2 直接中止、并对最终产物做 fail-closed 断言（详见脚本头部说明）。
+- [`LICENSE-GPL-3.0.txt`](LICENSE-GPL-3.0.txt)：随上述移植文件附带的 GPL-3.0 许可证文本，取自上游仓库的 `LICENSE` 文件。
+
+> 历史说明：本仓库早期版本另带一个 `susfs_drift_fixes.patch`（上游 `fb8379aa` 时期的独立适配补丁）。上游自 `d6255c5f4` 起已把该补丁的全部改动改为 `apply.sh` 内联修复，因此本仓库同步移除该文件，不再保留冗余补丁副本。
 
 FinaSU 仓库标记 GPL-3.0。许可是否与实际构建组合兼容，应以本次使用的具体文件、commit 和许可文本核查结果为准；本说明不把整个仓库或内核产物统一标为 GPL-3.0。
 

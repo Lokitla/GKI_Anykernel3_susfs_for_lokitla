@@ -1,42 +1,507 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Based on LingLuo17/AnyKernel3 scripts/finasu_compat/apply.sh.
-set -euo pipefail
+# FinaSU 内核侧 SUSFS 集成：应用上游补丁 + 结构漂移内联修复
+#
+# 来源与许可
+#   本脚本移植自 LingLuo17/AnyKernel3 的 scripts/finasu_compat/apply.sh
+#   （GPL-3.0-only），对应上游 commit d6255c5f4
+#   ("fix(finasu): restore arch syscall_hook objects for preinit ksu_syscall_table reference")。
+#   上游版权与许可文本见本仓库根目录 LICENSE-GPL-3.0.txt 与 THIRD_PARTY_NOTICES.md。
+#   本仓库在上游实现基础上按自身的失败处理约定改写：所有原本
+#   `|| true` / 只告警的路径都补上了 fail-closed 断言，结构不符时中止构建而不是产出残废内核。
+#
+# 为什么需要本脚本
+#   BakaSU / SukiSU 用上游 KernelSU 内置的 SUSFS 支持；FinaSU 不同，它需要
+#   1) 用 `patch -p1 --forward` 应用 susfs4ksu 的 KernelSU 侧补丁
+#      10_enable_susfs_for_ksu.patch（**允许部分 hunk 失败**：FinaSU 目录结构持续漂移，
+#      整体原子应用会一有漂移就全盘失败）；
+#   2) 再按补丁本意对被拒绝的漂移点做内联修复（core/init.c、feature/selinux_hide.c、
+#      runtime/ksud_integration.c、hook/setuid_hook.c、feature/sucompat.c、Kbuild 等）。
+#
+# 为什么不用 git apply
+#   git apply 是原子的：任一 hunk 失败则整包不落地，FinaSU 每次结构变动都会让构建全灭。
+#   上游已据此改用 patch --forward + 内联修复，本仓库沿用该策略。
+#
+# 用法: apply.sh [KSU_DIR]（默认 KernelSU）
+# 依赖: KERNEL_ROOT（默认 $PWD）、SUSFS4KSU（默认 $KERNEL_ROOT/susfs4ksu）
+set -eo pipefail
 
 KSU_DIR="${1:-KernelSU}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DRIFT_PATCH="$SCRIPT_DIR/susfs_drift_fixes.patch"
-UPSTREAM_PATCH="${SUSFS4KSU:-$PWD/susfs4ksu}/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-DRIFT_FILES=(
-  kernel/core/init.c
-  kernel/feature/selinux_hide.c
-  kernel/runtime/boot_event.c
-  kernel/supercall/dispatch.c
+KERNEL_ROOT="${KERNEL_ROOT:-$PWD}"
+SUSFS4KSU="${SUSFS4KSU:-$KERNEL_ROOT/susfs4ksu}"
+KSU_VARIANT="FinaSU"
+
+UPSTREAM_PATCH="$SUSFS4KSU/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+[ -f "$UPSTREAM_PATCH" ] || { echo "::error::未找到 susfs4ksu KSU 侧补丁: $UPSTREAM_PATCH" >&2; exit 1; }
+[ -d "$KERNEL_ROOT/$KSU_DIR/.git" ] || { echo "::error::$KSU_DIR 不是 git 仓库检出，无法应用补丁" >&2; exit 1; }
+
+echo "步骤 1/2: 应用 susfs4ksu 10_enable_susfs_for_ksu.patch（patch --forward，允许部分失败）..."
+cp "$UPSTREAM_PATCH" "$KERNEL_ROOT/$KSU_DIR/10_enable_susfs_for_ksu.patch"
+# patch --forward 的退出码：0=全部应用；1=部分 hunk 被跳过/已应用过；>=2=真失败。
+# 这里**不能**像上游那样 `|| true` 静默吞掉：FinaSU 结构漂移是常态，必须有可追溯的
+# 证据说明哪些 hunk 没落地，后续内联修复正是针对这些点。真失败（>=2）直接中止。
+_patch_rc=0
+( cd "$KERNEL_ROOT/$KSU_DIR" && patch -p1 --forward < 10_enable_susfs_for_ksu.patch ) || _patch_rc=$?
+if [ "$_patch_rc" -ge 2 ]; then
+  echo "::error::FinaSU: 10_enable_susfs_for_ksu.patch 应用失败（patch 退出码 ${_patch_rc}）" >&2
+  rm -f "$KERNEL_ROOT/$KSU_DIR/10_enable_susfs_for_ksu.patch"
+  exit 1
+fi
+_rej=$(find "$KERNEL_ROOT/$KSU_DIR" -name "*.rej" -type f 2>/dev/null | wc -l)
+echo "FinaSU: 上游补丁部分应用（patch 退出码 ${_patch_rc}，残留 ${_rej} 个 .rej），转入内联修复"
+rm -f "$KERNEL_ROOT/$KSU_DIR/10_enable_susfs_for_ksu.patch"
+
+echo "步骤 2/2: FinaSU 内联适配修复..."
+if [ "$KSU_VARIANT" == "FinaSU" ]; then
+  FINASU_KSU="$KERNEL_ROOT/KernelSU/kernel"
+  FINASU_INIT="$FINASU_KSU/core/init.c"
+  FINASU_KSU_H="$FINASU_KSU/include/ksu.h"
+  FINASU_KSI="$FINASU_KSU/runtime/ksud_integration.c"
+  if [ ! -f "$FINASU_INIT" ] || [ ! -f "$FINASU_KSU_H" ]; then
+    echo "::error::未找到 FinaSU 内核源码文件 (core/init.c / include/ksu.h)" >&2
+    exit 1
+  fi
+
+  # 0) 回退 selinux_hide.c，并恢复其依赖的基础模块进入编译列表
+  if git -C "$KERNEL_ROOT/KernelSU" rev-parse --git-dir > /dev/null 2>&1; then
+    git -C "$KERNEL_ROOT/KernelSU" checkout -- kernel/feature/selinux_hide.c
+    if ! git -C "$KERNEL_ROOT/KernelSU" diff --quiet -- kernel/feature/selinux_hide.c; then
+      echo "::error::FinaSU selinux_hide.c 未能回退为原始版本" >&2
+      exit 1
+    fi
+  fi
+  if ! grep -q 'hook/lsm_hook.o' "$FINASU_KSU/Kbuild"; then
+    sed -i 's|^kernelsu-objs += hook/setuid_hook.o$|kernelsu-objs += hook/setuid_hook.o\nkernelsu-objs += hook/lsm_hook.o\nkernelsu-objs += infra/symbol_resolver.o\n\nifeq ($(CONFIG_ARM64),y)\nkernelsu-objs += hook/arm64/patch_memory.o\nkernelsu-objs += hook/arm64/syscall_hook.o\nelse ifeq ($(CONFIG_X86_64),y)\nkernelsu-objs += hook/x86_64/patch_memory.o\nkernelsu-objs += hook/x86_64/syscall_hook.o\nelse ifeq ($(CONFIG_RISCV),y)\nkernelsu-objs += hook/riscv64/patch_memory.o\nkernelsu-objs += hook/riscv64/syscall_hook.o\nendif|' "$FINASU_KSU/Kbuild"
+  fi
+  # 0h) FinaSU 9d279c4 起 preinit.c（Kbuild 在目标 UAPI 头存在时始终编译）
+  #     引用 ksu_syscall_table，其定义 hook/<arch>/syscall_hook.c 被 SUSFS 补丁
+  #     移出了编译列表 → ThinLTO 链接报 undefined symbol。这里补回该编译单元
+  #     仅提供符号：init.c 不调用 ksu_syscall_hook_init()，syscall 表保持 NULL，
+  #     SUSFS 场景下 preinit 的 execve 桥（唯一调用方）也不参与编译，无运行时影响。
+  if ! grep -q 'hook/arm64/syscall_hook.o' "$FINASU_KSU/Kbuild"; then
+    sed -i 's|^kernelsu-objs += hook/arm64/patch_memory.o$|kernelsu-objs += hook/arm64/patch_memory.o\nkernelsu-objs += hook/arm64/syscall_hook.o|' "$FINASU_KSU/Kbuild"
+    sed -i 's|^kernelsu-objs += hook/x86_64/patch_memory.o$|kernelsu-objs += hook/x86_64/patch_memory.o\nkernelsu-objs += hook/x86_64/syscall_hook.o|' "$FINASU_KSU/Kbuild"
+    sed -i 's|^kernelsu-objs += hook/riscv64/patch_memory.o$|kernelsu-objs += hook/riscv64/patch_memory.o\nkernelsu-objs += hook/riscv64/syscall_hook.o|' "$FINASU_KSU/Kbuild"
+  fi
+  if ! grep -q 'hook/arm64/syscall_hook.o' "$FINASU_KSU/Kbuild" \
+    || ! grep -q 'hook/x86_64/syscall_hook.o' "$FINASU_KSU/Kbuild" \
+    || ! grep -q 'hook/riscv64/syscall_hook.o' "$FINASU_KSU/Kbuild"; then
+    echo "::error::FinaSU Kbuild 未恢复 hook/<arch>/syscall_hook.o（preinit 引用 ksu_syscall_table）" >&2
+    exit 1
+  fi
+
+  # 0b) SUSFS 内核补丁在 security/selinux/*.c 中以 extern 引用了这些符号，需与 BakaSU 一致
+  #     改为全局定义，否则 ThinLTO 链接阶段会报 undefined symbol。
+  #     - 6 个通用符号（>=5.10 用到）：
+  #       fake_state / fake_status / fake_status_initialize_key / initialize_fake_status /
+  #       ksu_selinux_hide_enabled / ksu_selinux_hide_running
+  #     - 3 个 6.6 才用到的函数（android15-6.6 主补丁在 security/selinux/* 中 extern 引用，
+  #       5.15/6.1 用不到，所以之前只在 6.6 上暴露为链接失败）：
+  #       security_context_to_sid_with_policy / security_sid_to_context_with_policy /
+  #       security_compute_av_user_with_policy
+  FINASU_SELINUX_HIDE="$FINASU_KSU/feature/selinux_hide.c"
+  if grep -q '^static bool ksu_selinux_hide_enabled ' "$FINASU_SELINUX_HIDE"; then
+    sed -i \
+      -e 's|^static bool ksu_selinux_hide_enabled |bool ksu_selinux_hide_enabled |' \
+      -e 's|^static bool ksu_selinux_hide_running |bool ksu_selinux_hide_running |' \
+      -e 's|^static struct selinux_state fake_state;|struct selinux_state fake_state;|' \
+      -e 's|^static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);|DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);|' \
+      -e 's|^static struct page \*fake_status = NULL;|struct page *fake_status = NULL;\nvoid initialize_fake_status(void);|' \
+      -e 's|^static void initialize_fake_status()|void initialize_fake_status(void)|' \
+      -e 's|^static int security_context_to_sid_with_policy|int security_context_to_sid_with_policy|' \
+      -e 's|^static int security_sid_to_context_with_policy|int security_sid_to_context_with_policy|' \
+      -e 's|^static void security_compute_av_user_with_policy|void security_compute_av_user_with_policy|' \
+      -e 's|^static void __nocfi security_compute_av_user_with_policy|void __nocfi security_compute_av_user_with_policy|' \
+      "$FINASU_SELINUX_HIDE"
+  fi
+
+  # 0c) SUSFS 主补丁已在内核侧接管 selinuxfs：security/selinux/selinuxfs.c 把
+  #     write_op[] 换成它自己的 my_write_access/my_write_context，security/selinux/hooks.c
+  #     注册了 my_setprocattr，并托管 sel_handle_status_ops 的 status 处理。
+  #     KSU 侧 selinux_hide.c 若再安装同名运行时 hook（write_op patch / setprocattr LSM hook /
+  #     status open hook），两套 hook 会互相覆盖；一旦 KSU 侧 patch 失败，ksu_selinux_hide_running
+  #     保持 false，SUSFS 内核代码里 !ksu_selinux_hide_running 的分支就会跳过伪装，
+  #     表现为「隐藏 SELinux 失效」。这里按 SUSFS 设计，让 selinux_hide.c 只提供共享符号，
+  #     不再安装运行时 hook。
+  # selinux_hide 形态检测（在 0c 之前，此时文件已回退为上游原版）：
+  #   新形态（preview1+）无 fake_state，0c 不能再注入 fake_state.initialized/policy，校验也跳过 fake_state 项
+  NEW_MODEL=0
+  if [ -f "$FINASU_SELINUX_HIDE" ] && ! grep -q 'fake_state' "$FINASU_SELINUX_HIDE"; then
+    NEW_MODEL=1
+  fi
+  echo "FinaSU selinux_hide 形态: $([ "$NEW_MODEL" = 1 ] && echo 新 || echo 旧)"
+
+  if ! grep -q 'FINASU_SUSFS_OWNS_SELINUXFS' "$FINASU_SELINUX_HIDE"; then
+    python3 - "$FINASU_SELINUX_HIDE" "${NEW_MODEL:-0}" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+new_model = (sys.argv[2] == "1")
+src = open(path, encoding="utf-8").read()
+
+# enable(): 在安装 write_op/status/setprocattr hook 之前直接返回；
+# 旧形态另需保留 <6.6 的 fake_state 设置，新形态没有 fake_state（统一用 backup_sepolicy）
+enable_anchor = '    selinux_write_op = find_kernel_symbol_exact("write_op");'
+assert src.count(enable_anchor) == 1, "selinux_hide enable anchor not unique"
+enable_block = (
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "    /* FINASU_SUSFS_OWNS_SELINUXFS: SUSFS 已接管 write_op/status/setprocattr */\n"
+)
+if not new_model:
+    enable_block += (
+        "#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)\n"
+        "    fake_state.initialized = true;\n"
+        "    fake_state.policy = backup_sepolicy;\n"
+        "#endif\n"
+    )
+enable_block += (
+    "    return 0;\n"
+    "#endif\n"
+)
+src = src.replace(enable_anchor, enable_block + enable_anchor, 1)
+
+# unhook(): 没有安装过就不要还原
+unhook_anchor = "static void ksu_selinux_hide_unhook()\n{\n"
+assert src.count(unhook_anchor) == 1, "selinux_hide unhook anchor not unique"
+src = src.replace(unhook_anchor, unhook_anchor + "#ifdef CONFIG_KSU_SUSFS\n    return;\n#endif\n", 1)
+
+# init(): 不再 hook status open（SUSFS 负责）
+init_anchor = "    hook_selinux_status_open();\n}"
+assert src.count(init_anchor) == 1, "selinux_hide init anchor not unique"
+src = src.replace(init_anchor, "#ifndef CONFIG_KSU_SUSFS\n    hook_selinux_status_open();\n#endif\n}", 1)
+
+open(path, "w", encoding="utf-8").write(src)
+print("selinux_hide.c: 已按 SUSFS 归属跳过 KSU 侧运行时 hook")
+PYEOF
+    grep -n 'FINASU_SUSFS_OWNS_SELINUXFS' "$FINASU_SELINUX_HIDE"
+  fi
+
+  # 0d) 保持 seccomp「过滤模式」（与 BakaSU 一致）：simonpunk 的 SUSFS KSU 补丁把
+  #     setuid_hook.c 里的 ksu_seccomp_allow_cache(__NR_reboot) 改成了无条件 disable_seccomp()，
+  #     于是管理器首页 Seccomp 状态显示“未开启”（0）。BakaSU 的做法是 >=5.10 保留过滤模式、
+  #     仅把 reboot 加入 seccomp 白名单；这里改回 BakaSU 的逻辑。
+  if [ -f "$FINASU_KSU/hook/setuid_hook.c" ] \
+    && ! grep -q 'FINASU_SECCOMP_KEEP_FILTER' "$FINASU_KSU/hook/setuid_hook.c" \
+    && grep -q '^        disable_seccomp();$' "$FINASU_KSU/hook/setuid_hook.c"; then
+    python3 - "$FINASU_KSU/hook/setuid_hook.c" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+needle = "        disable_seccomp();\n"
+count = src.count(needle)
+if count == 0:
+    print("setuid_hook.c: 未发现无条件 disable_seccomp()，跳过")
+    sys.exit(0)
+repl = (
+    "#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0) /* FINASU_SECCOMP_KEEP_FILTER */\n"
+    "        if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {\n"
+    "            spin_lock_irq(&current->sighand->siglock);\n"
+    "            ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);\n"
+    "            spin_unlock_irq(&current->sighand->siglock);\n"
+    "        }\n"
+    "#else\n"
+    "        disable_seccomp();\n"
+    "#endif\n"
+)
+src = src.replace(needle, repl)
+open(path, "w", encoding="utf-8").write(src)
+print("setuid_hook.c: 已将 %d 处 disable_seccomp() 改回 BakaSU 的 seccomp 白名单/过滤模式" % count)
+PYEOF
+    grep -n 'FINASU_SECCOMP_KEEP_FILTER\|ksu_seccomp_allow_cache(current->seccomp.filter' "$FINASU_KSU/hook/setuid_hook.c"
+  fi
+
+  # 0e) 补齐 ksud_integration.c 的 exec 钩子新签名
+  #     simonpunk 的补丁把 exec 钩子改成 fd 版：ksud.h 的声明、sucompat.c 的
+  #     ksu_handle_execveat() 调用都已是新签名，但 ksud_integration.c 里改写该函数的 hunk
+  #     因 FinaSU 多了一行 ksu_feature_apply_forced() 而失败，于是定义仍是旧的
+  #     void(const char*, struct user_arg_ptr*) → 「conflicting types for
+  #     'ksu_handle_execveat_ksud'」。这里按补丁本意改写为 fd 版并保留 ksu_feature_apply_forced()。
+  #     （旧的 ksu_execve_hook_ksud 定义已被补丁删除，其调用点 hook/syscall_event_bridge.c
+  #      也已被补丁移出编译列表，所以不再需要。）
+  if [ -f "$FINASU_KSI" ] && grep -q '^void ksu_handle_execveat_ksud(const char \*path, struct user_arg_ptr \*argv)' "$FINASU_KSI"; then
+    python3 - "$FINASU_KSI" <<'PYEOF'
+import os
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+
+old_sig = "void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)\n"
+if old_sig not in src:
+    print("ksud_integration.c: 未找到旧版 ksu_handle_execveat_ksud，跳过")
+    sys.exit(0)
+
+# ksu_feature_apply_forced() 是新形态（preview1 起）才有的函数；旧形态源码里
+# 引用它会变成隐式声明并在 -Werror 下编译失败，所以按符号存在性决定是否插入。
+root = os.path.dirname(os.path.dirname(path))
+has_forced = False
+for dirpath, _dirs, files in os.walk(root):
+    for f in files:
+        if f == "ksud_integration.c" or not f.endswith((".c", ".h")):
+            continue
+        try:
+            with open(os.path.join(dirpath, f), encoding="utf-8", errors="ignore") as fh:
+                if "ksu_feature_apply_forced" in fh.read():
+                    has_forced = True
+                    break
+        except OSError:
+            pass
+    if has_forced:
+        break
+forced_call = "                ksu_feature_apply_forced();\n" if has_forced else ""
+print("ksud_integration.c: ksu_feature_apply_forced 存在=%s，%s该调用" % (has_forced, "保留" if has_forced else "跳过"))
+
+start = src.index(old_sig)
+end = src.index("\n}\n", start) + len("\n}\n")
+
+new_func = (
+    "extern int ksu_handle_execveat_init(struct filename *filename, struct user_arg_ptr *argv_user, struct user_arg_ptr *envp_user);\n"
+    "\n"
+    "// IMPORTANT NOTE: the call from execve_handler_pre WON'T provided correct value for envp and flags in GKI version\n"
+    "int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,\n"
+    "                             struct user_arg_ptr *argv,\n"
+    "                             struct user_arg_ptr *envp, int *flags)\n"
+    "{\n"
+    "    struct filename *filename;\n"
+    "    static const char app_process[] = \"/system/bin/app_process\";\n"
+    "\n"
+    "    /* This applies to versions Android 10+ */\n"
+    "    static const char system_bin_init[] = \"/system/bin/init\";\n"
+    "\n"
+    "    if (!filename_ptr)\n"
+    "        return 0;\n"
+    "\n"
+    "    filename = *filename_ptr;\n"
+    "    if (IS_ERR(filename)) {\n"
+    "        return 0;\n"
+    "    }\n"
+    "\n"
+    "    if (static_branch_unlikely(&is_init_second_stage_not_executed)) {\n"
+    "        // https://cs.android.com/android/platform/superproject/+/android-16.0.0_r2:system/core/init/main.cpp;l=77\n"
+    "        if (unlikely(!memcmp(filename->name, system_bin_init, sizeof(system_bin_init) - 1) && argv)) {\n"
+    "            char buf[16];\n"
+    "            if (check_argv(*argv, 1, \"second_stage\", buf, sizeof(buf))) {\n"
+    "                pr_info(\"/system/bin/init second_stage executed\\n\");\n"
+    "                ksu_selinux_hide_handle_second_stage();\n"
+    "                apply_kernelsu_rules();\n"
+    "                cache_sid();\n"
+    "                setup_ksu_cred();\n"
+    + forced_call +
+    "                static_branch_disable(&is_init_second_stage_not_executed);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "\n"
+    "    if (static_branch_unlikely(&is_first_zygote)) {\n"
+    "        if (unlikely(!memcmp(filename->name, app_process, sizeof(app_process) - 1) && argv)) {\n"
+    "            char buf[16];\n"
+    "            if (check_argv(*argv, 1, \"-Xzygote\", buf, sizeof(buf))) {\n"
+    "                pr_info(\"exec zygote, /data prepared, second_stage: %d\\n\", !static_key_enabled(&is_init_second_stage_not_executed));\n"
+    "                on_post_fs_data();\n"
+    "                static_branch_disable(&is_first_zygote);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "\n"
+    "    return 0;\n"
+    "}\n"
 )
 
-fail() { echo "::error::$1" >&2; exit 1; }
-[ -f "$UPSTREAM_PATCH" ] || fail "未找到 SUSFS KernelSU 补丁: $UPSTREAM_PATCH"
-[ -f "$DRIFT_PATCH" ] || fail "未找到 FinaSU SUSFS 适配补丁: $DRIFT_PATCH"
-[ -d "$KSU_DIR/.git" ] || fail "$KSU_DIR 不是 Git 检出目录"
+src = src[:start] + new_func + src[end:]
+open(path, "w", encoding="utf-8").write(src)
+print("ksud_integration.c: 已按补丁本意把 ksu_handle_execveat_ksud 改写为 fd 版签名")
+PYEOF
+    grep -n '^int ksu_handle_execveat_ksud(int \*fd' "$FINASU_KSI"
+  fi
 
-exclude_args=()
-for file in "${DRIFT_FILES[@]}"; do
-  exclude_args+=("--exclude=$file")
-done
+  # 1) 移除已不参与编译的模块的调用（仅剩 syscall hook / syscall hook manager）
+  sed -i \
+    -e '/^[[:space:]]*ksu_syscall_hook_init();$/d' \
+    -e '/^[[:space:]]*ksu_syscall_hook_manager_init();$/d' \
+    -e '/^[[:space:]]*ksu_syscall_hook_manager_exit();$/d' \
+    "$FINASU_INIT"
 
-git -C "$KSU_DIR" apply "${exclude_args[@]}" "$UPSTREAM_PATCH" \
-  || fail "应用 SUSFS 上游补丁失败"
-git -C "$KSU_DIR" apply "$DRIFT_PATCH" \
-  || fail "应用 FinaSU SUSFS 结构适配补丁失败"
+  # 1b) 补回 lsm hook 退出调用（补丁删除了它，而该模块已恢复）
+  if ! grep -q 'ksu_lsm_hook_exit();' "$FINASU_INIT"; then
+    sed -i 's|^[[:space:]]*ksu_selinux_hide_exit();$|    ksu_lsm_hook_exit();\n    ksu_selinux_hide_exit();|' "$FINASU_INIT"
+  fi
 
-grep -q 'config KSU_SUSFS' "$KSU_DIR/kernel/Kconfig" \
-  || fail "FinaSU Kconfig 未声明 SUSFS 配置"
-grep -q 'susfs_init' "$KSU_DIR/kernel/core/init.c" \
-  || fail "FinaSU init.c 未接入 SUSFS 初始化"
-if grep -qE 'kernelsu-objs \+= hook/(lsm_hook|syscall_event_bridge|syscall_hook_manager|tp_marker)' "$KSU_DIR/kernel/Kbuild"; then
-  fail "FinaSU Kbuild 仍启用了与 SUSFS 冲突的 syscall hook 对象"
+  # 3) ksu_app_profile_init 已被补丁从 app_profile.c/h 整体删除，去掉残留调用
+  if ! grep -q 'void __init ksu_app_profile_init(' "$FINASU_KSU/policy/app_profile.c"; then
+    sed -i '/^[[:space:]]*ksu_app_profile_init();$/d' "$FINASU_INIT"
+  fi
+
+  # 2) 恢复 ksu_late_loaded / ksu_bundled（补丁从 ksu.h 与 init.c 删除，
+  #    但 FinaSU 的 dispatch / selinux_hide / ksud_integration 仍在使用）
+  if ! grep -q 'extern bool ksu_late_loaded;' "$FINASU_KSU_H"; then
+    sed -i 's|^extern bool ksu_no_custom_rc;$|extern bool ksu_no_custom_rc;\nextern bool ksu_late_loaded;\nextern bool ksu_bundled;|' "$FINASU_KSU_H"
+  fi
+  # 新形态（9d279c4 起）的 init.c 仍保留 MODULE 分支的 ksu_bundled 定义
+  # （上游补丁删除它的 hunk 因上下文漂移失败），此时只补 ksu_late_loaded，
+  # 否则会产生重复定义。
+  if ! grep -q '^bool ksu_late_loaded;' "$FINASU_INIT"; then
+    if grep -q '^bool ksu_bundled = false;' "$FINASU_INIT"; then
+      sed -i 's|^struct cred \*ksu_cred;$|struct cred *ksu_cred;\n\nbool ksu_late_loaded;|' "$FINASU_INIT"
+    else
+      sed -i 's|^struct cred \*ksu_cred;$|struct cred *ksu_cred;\n\nbool ksu_late_loaded;\n\n#ifdef MODULE\nbool ksu_bundled = false;\nmodule_param_named(bundled, ksu_bundled, bool, 0);\n#endif|' "$FINASU_INIT"
+    fi
+  fi
+
+  # 0f) FinaSU 9d279c4 起 userspace_stack_buffer 从 sucompat.c 挪到 util.h，
+  #     而 SUSFS 补丁删除了 sucompat.c 的 #include "util.h" / #include "ksu.h"，
+  #     导致 ksud_user_path/sh_user_path 调用未定义函数（-Wimplicit-function-declaration）。
+  #     这里在引用存在且无本地定义时补回 util.h。
+  FINASU_SUCOMPAT="$FINASU_KSU/feature/sucompat.c"
+  if [ -f "$FINASU_SUCOMPAT" ] && grep -q 'userspace_stack_buffer' "$FINASU_SUCOMPAT" \
+    && ! grep -q '^static void __user \*userspace_stack_buffer' "$FINASU_SUCOMPAT" \
+    && ! grep -q '#include "util.h"' "$FINASU_SUCOMPAT"; then
+    sed -i 's|^#include "objsec.h"$|#include "objsec.h"\n#include "util.h"|' "$FINASU_SUCOMPAT"
+  fi
+  if grep -q 'userspace_stack_buffer' "$FINASU_SUCOMPAT" \
+    && ! grep -q '^static void __user \*userspace_stack_buffer' "$FINASU_SUCOMPAT" \
+    && ! grep -q '#include "util.h"' "$FINASU_SUCOMPAT"; then
+    echo "::error::FinaSU sucompat.c 引用 userspace_stack_buffer 但 util.h 不可用，代码结构可能已变化" >&2
+    exit 1
+  fi
+
+  # 0g) SUSFS 补丁在 ksud_integration.c 的 4 个 static key 定义 hunk 因结构漂移失败，
+  #     但后续 hunk 已把这些 key 改为按引用使用（原 hook stop 逻辑）→ 未定义引用。
+  #     按被拒 hunk 1 的原意补回定义（含 linux/jump_label.h）。
+  if [ -f "$FINASU_KSI" ]; then
+    NEED_KEYS=""
+    for KEY in ksu_is_init_rc_hook_enabled ksu_is_input_hook_enabled is_init_second_stage_not_executed is_first_zygote; do
+      if grep -q "$KEY" "$FINASU_KSI" \
+        && ! grep -q "DEFINE_STATIC_KEY_TRUE($KEY)" "$FINASU_KSI" \
+        && ! grep -rn "DEFINE_STATIC_KEY_TRUE($KEY)" "$FINASU_KSU" --include="*.c" --include="*.h" > /dev/null 2>&1; then
+        NEED_KEYS="$NEED_KEYS$KEY\n"
+      fi
+    done
+    if [ -n "$NEED_KEYS" ]; then
+      if ! grep -q '#include "linux/jump_label.h"' "$FINASU_KSI"; then
+        sed -i 's|^#include <linux/rcupdate.h>$|#include <linux/rcupdate.h>\n#include "linux/jump_label.h"|' "$FINASU_KSI"
+      fi
+      python3 - "$FINASU_KSI" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+
+keys = ["ksu_is_init_rc_hook_enabled", "ksu_is_input_hook_enabled",
+        "is_init_second_stage_not_executed", "is_first_zygote"]
+defs = "".join("DEFINE_STATIC_KEY_TRUE(%s);\n" % k for k in keys
+               if "DEFINE_STATIC_KEY_TRUE(%s)" % k not in src)
+if defs:
+    anchor = "// clang-format off\n"
+    assert anchor in src, "ksud_integration.c: static key anchor not found"
+    src = src.replace(anchor, defs + "\n" + anchor, 1)
+    open(path, "w", encoding="utf-8").write(src)
+    print("ksud_integration.c: 已补回 %d 个 static key 定义" % len(defs.splitlines()))
+PYEOF
+    fi
+    # 跳转标签定义存在但头文件缺失时（上游补丁自带的定义 hunk 不带 include）也补上
+    if grep -q 'DEFINE_STATIC_KEY_TRUE' "$FINASU_KSI" \
+      && ! grep -q 'jump_label' "$FINASU_KSI" \
+      && grep -q '^#include <linux/rcupdate.h>$' "$FINASU_KSI"; then
+      sed -i 's|^#include <linux/rcupdate.h>$|#include <linux/rcupdate.h>\n#include "linux/jump_label.h"|' "$FINASU_KSI"
+      grep -n 'jump_label' "$FINASU_KSI" | head -1
+    fi
+    for KEY in ksu_is_init_rc_hook_enabled ksu_is_input_hook_enabled is_init_second_stage_not_executed is_first_zygote; do
+      if grep -q "$KEY" "$FINASU_KSI" \
+        && ! grep -rn "DEFINE_STATIC_KEY_TRUE($KEY)" "$FINASU_KSU" --include="*.c" --include="*.h" > /dev/null 2>&1; then
+        echo "::error::FinaSU ksud_integration.c 引用 static key $KEY 但定义缺失" >&2
+        exit 1
+      fi
+    done
+  fi
+
+  # 4a) 补齐新架构初始化函数的头文件声明
+  if ! grep -q '#include "feature/sucompat.h"' "$FINASU_INIT"; then
+    sed -i 's|^#include "feature/avc_spoof.h"$|#include "feature/avc_spoof.h"\n#include "feature/sucompat.h"\n#include "hook/setuid_hook.h"|' "$FINASU_INIT"
+  fi
+
+  # 4a2) 补回 lsm_hook 头文件（补丁删除了该 include，而调用已恢复）
+  if ! grep -q '#include "hook/lsm_hook.h"' "$FINASU_INIT"; then
+    sed -i 's|^#include "hook/setuid_hook.h"$|#include "hook/setuid_hook.h"\n#include "hook/lsm_hook.h"|' "$FINASU_INIT"
+  fi
+
+  # 4b) SUSFS 初始化（补丁已在 init.c 顶部加入 susfs.h 头文件）
+  if ! grep -q 'susfs_init();' "$FINASU_INIT"; then
+    sed -i 's|^[[:space:]]*ksu_feature_init();$|#ifdef CONFIG_KSU_SUSFS\n    susfs_init();\n#endif // #ifdef CONFIG_KSU_SUSFS\n    ksu_feature_init();|' "$FINASU_INIT"
+  fi
+
+  # 4c) 原先由 hook/syscall_hook_manager.c 代调用的初始化，改为 init.c 直接调用
+  if ! grep -q 'ksu_sucompat_init();' "$FINASU_INIT"; then
+    sed -i 's|^[[:space:]]*ksu_supercalls_init();$|    ksu_supercalls_init();\n\n    ksu_sucompat_init();\n\n    ksu_setuid_hook_init();|' "$FINASU_INIT"
+  fi
+
+  # 5) 部分应用的补丁会残留少量 unused 代码（如 selinux_hide.c），
+  #    GKI 的 -Werror 下放行该告警类别，避免遗留代码阻断编译。
+  #    必须逐个用 $(call cc-option, ...) 探测：老内核（如 5.10）的 clang 不认识
+  #    unused-but-set-variable，而 KBUILD 默认带 -Werror=unknown-warning-option，
+  #    直接写 -Wno-error=unused-but-set-variable 会被当作未知告警选项 → 编译失败：
+  #      drivers/kernelsu/core/init.o: unknown warning option '-Werror=unused-but-set-variable'
+  #    cc-option 探测后，不支持的告警会被自动丢弃（5.15/6.6 的较新 clang 仍会保留）。
+  if ! grep -q 'Wno-error=unused-variable' "$FINASU_KSU/Kbuild"; then
+    cat >> "$FINASU_KSU/Kbuild" << 'KSU_KBUILD_EOF'
+
+# FinaSU: SUSFS 补丁部分应用后的残留代码允许 unused 类告警。
+# 用 cc-option 探测，避免把编译器不认识的告警选项在 -Werror=unknown-warning-option 下变成硬错误。
+ccflags-y += $(call cc-option,-Wno-error=unused-variable) \
+             $(call cc-option,-Wno-error=unused-function) \
+             $(call cc-option,-Wno-error=unused-but-set-variable) \
+             $(call cc-option,-Wno-error=unused-const-variable)
+KSU_KBUILD_EOF
+  fi
+
+  # selinux_hide 形态检测：新形态（preview1+ 无 fake_state）需跳过 fake_state 校验
+  NEW_MODEL=0
+  if [ -f "$FINASU_SELINUX_HIDE" ] && ! grep -q 'fake_state' "$FINASU_SELINUX_HIDE"; then
+    NEW_MODEL=1
+  fi
+
+  # 结果校验，防止上游代码结构变化后静默失效
+  if ! grep -q 'susfs_init();' "$FINASU_INIT" \
+    || ! grep -q 'ksu_sucompat_init();' "$FINASU_INIT" \
+    || ! grep -q 'ksu_setuid_hook_init();' "$FINASU_INIT" \
+    || ! grep -q 'ksu_init_symbol_resolver();' "$FINASU_INIT" \
+    || ! grep -q 'ksu_lsm_hook_init();' "$FINASU_INIT" \
+    || ! grep -q 'ksu_lsm_hook_exit();' "$FINASU_INIT" \
+    || ! grep -q '#include "hook/lsm_hook.h"' "$FINASU_INIT" \
+    || ! grep -q '^bool ksu_late_loaded;' "$FINASU_INIT" \
+    || ! grep -q 'extern bool ksu_late_loaded;' "$FINASU_KSU_H" \
+    || ! grep -q 'hook/lsm_hook.o' "$FINASU_KSU/Kbuild" \
+    || ! grep -q 'infra/symbol_resolver.o' "$FINASU_KSU/Kbuild" \
+    || ! grep -q '^bool ksu_selinux_hide_enabled ' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^bool ksu_selinux_hide_running ' "$FINASU_SELINUX_HIDE" \
+    || ! { [ "${NEW_MODEL:-0}" = 1 ] || grep -q '^struct selinux_state fake_state;' "$FINASU_SELINUX_HIDE"; } \
+    || ! grep -q '^DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^struct page \*fake_status = NULL;' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^void initialize_fake_status(void)$' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^int security_context_to_sid_with_policy' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^int security_sid_to_context_with_policy' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^void security_compute_av_user_with_policy' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^int ksu_handle_execveat_ksud(int \*fd, struct filename \*\*filename_ptr,' "$FINASU_KSI"; then
+    echo "::error::FinaSU 适配修复失败，代码结构可能已变化" >&2
+    exit 1
+  fi
+  if grep -qE '^static (int|void) (__nocfi )?security_(context_to_sid_with_policy|sid_to_context_with_policy|compute_av_user_with_policy)' "$FINASU_SELINUX_HIDE"; then
+    echo "::error::FinaSU selinux_hide.c 的 security_*_with_policy 仍未全局化（6.6 会链接失败）" >&2
+    exit 1
+  fi
+  if grep -qE 'ksu_syscall_hook_init\(\)|ksu_syscall_hook_manager_(init|exit)\(\)' "$FINASU_INIT"; then
+    echo "::error::FinaSU init.c 仍存在指向已移除模块的调用" >&2
+    exit 1
+  fi
 fi
-if find "$KSU_DIR/kernel" -name '*.rej' -print -quit | grep -q .; then
-  fail "FinaSU SUSFS 补丁留下 .rej 文件"
+
+echo "FinaSU SUSFS 内核侧集成补丁应用完成"
+
+# 兜底：应用完上游补丁后，selinuxfs.c 必须已被 SUSFS 接管（否则 SUSFS 的 SELinux 隐藏不生效）。
+# 这一步与 scripts/build_kernel.sh 的 ksu_patch_text 断言互补：那个查 KSU 侧是否被正确排除，
+# 这里查 SUSFS 侧是否真的落进了内核树。
+SELINUXFS="$KERNEL_ROOT/$KSU_DIR/../security/selinux/selinuxfs.c"
+if [ -f "$SELINUXFS" ] && ! grep -q "CONFIG_KSU_SUSFS" "$SELINUXFS"; then
+  echo "::error::FinaSU: SUSFS 补丁未改写 security/selinux/selinuxfs.c，SELinux 隐藏不会生效" >&2
+  exit 1
 fi
-echo "FinaSU SUSFS 集成补丁应用并通过结构检查"

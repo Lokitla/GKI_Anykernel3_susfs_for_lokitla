@@ -86,6 +86,7 @@
 - **SUSFS 补丁源**：BakaSU / SukiSU 默认从 [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) 的 `gki-<android>-<kernel>` 分支克隆；SukiSU 会优先尝试 ShirkNeko 的 fork，分支不存在时回落到原版。分支永远跟随上游最新，不钉提交（需要时可显式指定 `susfs_commit`）。
 - **BakaSU 的挂起不是本仓库造成的**：上游自 `48fa4bb` 起主动停用 SUSFS 构建，等待 simonpunk 同步新的 `selinux_hide` 模型。本仓库不无条件放行，而是核对补丁落地后的真实形态（< 6.6 看 `hooks.c` 的手动钩子与 `should_check_current`，≥ 6.6 看 `selinuxfs.c` 的 `_with_policy` 模型；也可能命中 `backup_sepolicy` 新形态），判定不通过就明确失败，避免产出上游刻意规避的可检测内核。
 - **FinaSU 与 BakaSU/SukiSU 的 SELinux 模型不同**：FinaSU 上游已移除 `fake_state`，改用 `backup_sepolicy` + `security_*_with_policy`。SUSFS 主补丁仍按旧模型引用 `fake_state`，因此本仓库在补丁落地后会自动改写这些引用（[`scripts/susfs_fixes/apply.sh`](scripts/susfs_fixes/apply.sh) 的 `adapt_finasu_selinux_hide_model`）；改写不成功（待替换串不是恰好命中一次、或仍有残留）一律中止构建。
+- **FinaSU 的内核侧集成脚本来自 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)**：`scripts/finasu_compat/apply.sh` 移植自该仓库 commit `d6255c5f44e3871743c7d1570436822227b4b2fd`（GPL-3.0-only），`extract_manager_cert.py` 移植自 commit `fb8379aa781f9e94cabee2c12f543144035b5da3`。这两处的来源、许可与改动说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - **自动触发覆盖范围**：`Auto_Trigger_BakaSU.yml` 与 `Auto_Trigger_SukiSU.yml` 只跟踪这两个变体的上游更新；FinaSU 目前需手动触发构建。
 
 ## 本地构建
