@@ -1959,11 +1959,23 @@ stage_apply_susfs() {
     KERNEL_ROOT="$KERNEL_ROOT" SUSFS4KSU="$SUSFS4KSU" \
       bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "KernelSU" \
       || { cd "$_pwd"; return 1; }
-    if grep -q 'ksu_patch_text' "$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"; then
-      echo "::error::FinaSU SUSFS 适配后仍保留 ksu_patch_text，拒绝继续构建以避免 SELinux 隐藏冲突"
+    # 判据说明：FinaSU 上游 selinux_hide.c 本来就带 ksu_patch_text（FinaSU 40c97e2 有 6 处），
+    # 适配不是把它删掉，而是由 finasu_compat 在 enable() 里按 CONFIG_KSU_SUSFS 提前 return，
+    # 注入标记 FINASU_SUSFS_OWNS_SELINUXFS，让这些运行时 patch 在 SUSFS 场景下不可达
+    # （SUSFS 已在内核侧接管 write_op / status / setprocattr，两套 hook 会互相覆盖）。
+    # 所以这里要求的不是「没有 ksu_patch_text」，而是「有短路标记且 return 在 patch 之前」。
+    FINASU_HIDE="$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"
+    if ! grep -q 'FINASU_SUSFS_OWNS_SELINUXFS' "$FINASU_HIDE"; then
+      echo "::error::FinaSU SUSFS 适配后 selinux_hide.c 缺少 FINASU_SUSFS_OWNS_SELINUXFS 短路标记，KSU 侧运行时 hook 会与 SUSFS 冲突"
       return 1
     fi
-    echo "FinaSU SELinux 校验通过：适配后的 selinux_hide.c 不再包含 ksu_patch_text"
+    _short_circuit_line=$(grep -n 'FINASU_SUSFS_OWNS_SELINUXFS' "$FINASU_HIDE" | head -1 | cut -d: -f1)
+    _first_patch_line=$(grep -n 'ksu_patch_text' "$FINASU_HIDE" | head -1 | cut -d: -f1)
+    if [ -n "$_first_patch_line" ] && [ "$_short_circuit_line" -ge "$_first_patch_line" ]; then
+      echo "::error::FinaSU 短路标记（第 ${_short_circuit_line} 行）不在首个 ksu_patch_text（第 ${_first_patch_line} 行）之前，运行时 hook 仍会执行"
+      return 1
+    fi
+    echo "FinaSU SELinux 校验通过：selinux_hide.c 已在第 ${_short_circuit_line} 行短路，早于首个 ksu_patch_text（第 ${_first_patch_line} 行）"
   fi
 
   # apply.sh 的 exit 1 必须在这里上抛：主循环用 `if ! "run_${p}"` 调用阶段，
