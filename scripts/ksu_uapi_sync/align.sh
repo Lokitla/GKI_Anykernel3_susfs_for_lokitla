@@ -48,7 +48,34 @@ set -uo pipefail
 
 KSU_DIR="${1:-KernelSU}"
 TARGET="${KSU_UAPI_TARGET:-}"
-UPSTREAM_UAPI_URL="${KSU_UAPI_URL:-https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/uapi/supercall.h}"
+# 目标 UAPI 版本必须取自**与内核实际检出同源**的上游文件，否则会把内核版本号改成一个它并不具备的号。
+# 各变体的上游仓库与 UAPI 头路径并不一致：
+#   SukiSU（main / builtin）   SukiSU-Ultra/SukiSU-Ultra  uapi/supercall.h（builtin 为 kernel/include/uapi/supercall.h）
+#   BakaSU                     Baka-SU/BakaSU             uapi/supercall.h
+#   FinaSU                     LyraVoid/FinaSU            uapi/supercall.h（随 Release 固定）
+#   KernelSU / Next            tiann/KernelSU / KernelSU-Next  uapi/supercall.h
+# 历史上这里写死 SukiSU-Ultra main，等于假设所有变体都跟 SukiSU main 同源。
+# 一旦 SukiSU 先涨到 UAPI 6 而 BakaSU 仍停在 5，BakaSU 内核的版本号就会被改写成 6，
+# 出现「版本号自称 6、实际缺 6 的符号」——正是要避免的情况。
+KSU_UAPI_URL="${KSU_UAPI_URL:-}"
+if [ -z "$KSU_UAPI_URL" ]; then
+  case "${KSU_VARIANT:-SukiSU}" in
+    BakaSU)  KSU_UAPI_URL="https://raw.githubusercontent.com/Baka-SU/BakaSU/main/uapi/supercall.h" ;;
+    FinaSU)  KSU_UAPI_URL="https://raw.githubusercontent.com/LyraVoid/FinaSU/master/uapi/supercall.h" ;;
+    Next)    KSU_UAPI_URL="https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/uapi/supercall.h" ;;
+    Official) KSU_UAPI_URL="https://raw.githubusercontent.com/tiann/KernelSU/main/uapi/supercall.h" ;;
+    *)
+      # SukiSU 系：main 与 builtin 是两条独立拓扑，UAPI 头路径也不同，按实际检出分支取。
+      _uapi_branch="${KSU_BRANCH_MODE_RESOLVED:-main}"
+      if [ "$_uapi_branch" = "builtin" ] || [ "$_uapi_branch" = "builtin-new" ] || [ "$_uapi_branch" = "builtin-rebase" ]; then
+        KSU_UAPI_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${_uapi_branch}/kernel/include/uapi/supercall.h"
+      else
+        KSU_UAPI_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/uapi/supercall.h"
+      fi
+      ;;
+  esac
+fi
+UPSTREAM_UAPI_URL="$KSU_UAPI_URL"
 
 die() {
   echo "::error::SukiSU UAPI 对齐：$*"

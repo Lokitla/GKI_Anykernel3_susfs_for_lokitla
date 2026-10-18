@@ -1458,7 +1458,22 @@ stage_add_kernelsu() {
 
   # setup.sh 内部是 `git checkout "$1" ... || echo "[-] Checkout default branch"`：
   # 复核 KernelSU 实际分支或提交；与预期不符时终止构建。
-  KSU_EXPECT_REF="${KSU_COMMIT:-$BRANCH}"
+  #
+  # KSU_COMMIT 是「跟随上游 main 的管理器构建提交」，只对**内核也检出 main 的变体**有意义：
+  #   - BakaSU / FinaSU：有一致的 origin，会在上面 git checkout --detach "$KSU_COMMIT"；
+  #   - SukiSU：走 builtin 分支（其 UAPI/提交拓扑与 main 独立，两者 commit 号互不通用），
+  #     从未执行过 KSU_COMMIT 检出。此时若仍拿 main 的提交做期望值，校验必然失败：
+  #     「期望 ffa00c0…，实际分支=builtin HEAD=7f1c299…」就是这么来的。
+  # 因此仅在「实际检出的就是 main 分支」时才用 KSU_COMMIT 作为期望值，否则用分支名。
+  KSU_ACTUAL_BRANCH_PRE=$(git -C KernelSU rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  if [ -n "${KSU_COMMIT:-}" ] && [ "$KSU_ACTUAL_BRANCH_PRE" = "main" ]; then
+    KSU_EXPECT_REF="$KSU_COMMIT"
+  else
+    if [ -n "${KSU_COMMIT:-}" ] && [ "$KSU_ACTUAL_BRANCH_PRE" != "main" ]; then
+      echo "KernelSU 对齐跳过：内核检出在 ${KSU_ACTUAL_BRANCH_PRE} 分支，与管理器构建所在的 main 分支拓扑不同，不使用 KSU_COMMIT=${KSU_COMMIT:0:9} 做期望值"
+    fi
+    KSU_EXPECT_REF="$BRANCH"
+  fi
   if [ -d "KernelSU/.git" ] && [ -n "$KSU_EXPECT_REF" ]; then
     KSU_ACTUAL_BRANCH=$(git -C KernelSU rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     KSU_ACTUAL_HEAD=$(git -C KernelSU rev-parse HEAD 2>/dev/null || echo "")
@@ -1592,9 +1607,20 @@ stage_sync_ksu_uapi() {
   #   BakaSU —— 内核与管理器同源（都跟 main），当前两侧都已是 5；仍跑一遍只为
   #             在上游回退或分叉时立刻暴露，属防回退而非修现状。
   # Official / Next 的内核与管理器同属一个仓库同一血统，不存在该漂移，不介入。
+  # 目标版本必须取自**内核实际检出所在的分支**，否则会把版本号改成一个该内核并不具备的号：
+  #   SukiSU 的 main 与 builtin 是两条独立拓扑，UAPI 头路径也不同
+  #   （main: uapi/supercall.h；builtin: kernel/include/uapi/supercall.h）。
+  #   历史实现写死 main 的路径，等于假设 builtin 与 main 同版本——2026-10 起两侧确实都是 6，
+  #   但一旦其中一侧先涨，写死就会把内核改错版本（版本号自称新、实际缺对应符号）。
+  #   这里改为按 $BRANCH（本阶段解析出的实际检出分支）选路径。
   case "${KSU_VARIANT}" in
     SukiSU|SukiSU\(*\))
-      UAPI_UPSTREAM="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/uapi/supercall.h" ;;
+      case "${BRANCH:-main}" in
+        builtin|builtin-new|builtin-rebase)
+          UAPI_UPSTREAM="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${BRANCH}/kernel/include/uapi/supercall.h" ;;
+        *)
+          UAPI_UPSTREAM="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/uapi/supercall.h" ;;
+      esac ;;
     BakaSU) UAPI_UPSTREAM="https://raw.githubusercontent.com/Baka-SU/BakaSU/main/uapi/supercall.h" ;;
     *)
       echo "跳过：变体 ${KSU_VARIANT} 的内核与管理器同源，无 UAPI 漂移"
