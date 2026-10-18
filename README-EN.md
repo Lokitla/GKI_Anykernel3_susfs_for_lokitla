@@ -89,6 +89,15 @@ Additional notes:
 - **FinaSU's kernel-side integration script comes from [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)**: `scripts/finasu_compat/apply.sh` is ported from that repository's commit `d6255c5f44e3871743c7d1570436822227b4b2fd` (GPL-3.0-only), and `extract_manager_cert.py` from commit `fb8379aa781f9e94cabee2c12f543144035b5da3`. Source, licensing, and the changes made here are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **Automatic trigger coverage**: `Auto_Trigger_BakaSU.yml` and `Auto_Trigger_SukiSU.yml` only track those two variants; FinaSU currently needs a manual build.
 
+### Version alignment and tracking policy
+
+The general convention here is **"track upstream head unless explicitly pinned"** — versions are only locked when you pass an explicit hash/tag:
+
+- **KernelSU checkout**: SukiSU uses `main` or `builtin` (automatically `builtin` when SUSFS is enabled); BakaSU / FinaSU align to the same commit as the selected manager build, so the kernel KernelSU version matches the manager APK exactly.
+- **SUSFS patch source**: always clones the head of the upstream `gki-<android>-<kernel>` branch, never pinned; pass `susfs_commit` when you need reproducibility.
+- **KernelSU UAPI version**: the target value is read from `supercall.h` **on the branch the kernel actually checks out** — `main` keeps it at `uapi/supercall.h`, `builtin` at `kernel/include/uapi/supercall.h`, and the two evolve independently. This avoids rewriting a BakaSU kernel to a SukiSU version number.
+- **KPM patch tool**: follows [SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch) upstream head and **never blocks a build**. `config/kpm_patch_sha256` merely records what upstream looked like at the last build; when it drifts, the build logs a `::warning::` and continues. Only an explicitly passed `kpm_patch_sha256` triggers a fail-closed comparison. Use `scripts/tools/pin_kpm_patch.sh` to refresh the recorded value.
+
 ## Local build
 
 Local builds require Linux. List available configurations and build one version:

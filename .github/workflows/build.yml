@@ -177,9 +177,10 @@ permissions:
         required: false
         type: string
         default: ""
-      # kpm_patch_sha256 已从所有手动入口隐藏：留空即不校验，是唯一常规用法。
-      # 底层校验逻辑（EXPECTED_KPM_PATCH_SHA256）保留在 build_kernel.sh 中，
-      # 本地 build.py --kpm-patch-sha256 仍可显式传入。
+      # kpm_patch_sha256 已从所有手动入口隐藏。项目约定：所有提交/工具「不指定即跟随上游最新」，
+      # 上游更新 patch_linux 属正常行为，不应让构建失败。
+      #   - 留空（CI 的常规用法）：build_kernel.sh 只读 config/kpm_patch_sha256 做**漂移告警**并继续；
+      #   - 本地 build.py --kpm-patch-sha256 显式传入：才做 fail-closed 比对，不符即中止。
 jobs:
   build-kernel:
     name: ${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}

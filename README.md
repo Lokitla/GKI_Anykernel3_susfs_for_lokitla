@@ -89,6 +89,15 @@
 - **FinaSU 的内核侧集成脚本来自 [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)**：`scripts/finasu_compat/apply.sh` 移植自该仓库 commit `d6255c5f44e3871743c7d1570436822227b4b2fd`（GPL-3.0-only），`extract_manager_cert.py` 移植自 commit `fb8379aa781f9e94cabee2c12f543144035b5da3`。这两处的来源、许可与改动说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - **自动触发覆盖范围**：`Auto_Trigger_BakaSU.yml` 与 `Auto_Trigger_SukiSU.yml` 只跟踪这两个变体的上游更新；FinaSU 目前需手动触发构建。
 
+### 版本对齐与跟随策略
+
+本仓库的通用约定是 **「不指定就跟随上游最新」**，只有显式传入 hash/tag 时才钉死版本：
+
+- **KernelSU 检出**：SukiSU 走 `main` 或 `builtin`（开 SUSFS 时自动 `builtin`）；BakaSU / FinaSU 会对齐到所选管理器构建的同一提交，以便内核 KSU 版本与管理器 APK 严格一致。
+- **SUSFS 补丁源**：始终克隆上游 `gki-<android>-<kernel>` 分支头，不钉提交；需要复现时传 `susfs_commit`。
+- **KernelSU UAPI 版本**：目标值**取自内核实际检出所在分支的** `supercall.h` —— `main` 在 `uapi/supercall.h`、`builtin` 在 `kernel/include/uapi/supercall.h`，两者独立演进。因此不会出现「把 BakaSU 的版本号改成 SukiSU 的号」这类错配。
+- **KPM 修补工具**：随 [SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch) 上游最新，**不阻断构建**。`config/kpm_patch_sha256` 只是「上次构建时上游的样子」，值变化时打印 `::warning::` 并继续；只有显式传入 `kpm_patch_sha256` 才做 fail-closed 比对。上游更新后可用 `scripts/tools/pin_kpm_patch.sh` 刷新记录。
+
 ## 本地构建
 
 本地构建需要 Linux 环境。查看支持的版本并构建一个版本：
