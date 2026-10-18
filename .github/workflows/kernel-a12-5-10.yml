@@ -17,6 +17,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - BakaSU
+          - FinaSU
           - Official
           - Next
         default: BakaSU
@@ -130,7 +131,7 @@ on:
           - "builtin"
         default: "auto"
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定。FinaSU 始终对齐官方 Release"
         required: false
         type: string
         default: ""
@@ -229,12 +230,20 @@ on:
         type: string
         default: "auto"
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定。FinaSU 始终对齐官方 Release"
         required: false
         type: string
         default: ""
       ksu_commit:
         description: "对齐用：内核 KernelSU 检出到该提交（所选 Manager 构建同一提交；留空跟随 main HEAD）"
+        required: false
+        type: string
+        default: ""
+      ksu_cert_size:
+        required: false
+        type: string
+        default: ""
+      ksu_cert_hash:
         required: false
         type: string
         default: ""
@@ -280,8 +289,10 @@ jobs:
       os_patch_level: ${{ matrix.os_patch_level }}
       revision: ${{ matrix.revision }}
       ksu_variant: ${{ inputs.kernelsu_variant }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
-      ksu_commit: ${{ inputs.ksu_commit }}
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
+      ksu_commit: ${{ inputs.ksu_commit || needs.get-ksu-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ inputs.ksu_cert_size || needs.get-ksu-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ inputs.ksu_cert_hash || needs.get-ksu-manager.outputs.managerCertHash }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_zram: ${{ inputs.use_zram }}
