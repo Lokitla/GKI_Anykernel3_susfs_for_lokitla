@@ -1464,16 +1464,21 @@ stage_add_kernelsu() {
   #   - SukiSU：走 builtin 分支（其 UAPI/提交拓扑与 main 独立，两者 commit 号互不通用），
   #     从未执行过 KSU_COMMIT 检出。此时若仍拿 main 的提交做期望值，校验必然失败：
   #     「期望 ffa00c0…，实际分支=builtin HEAD=7f1c299…」就是这么来的。
-  # 因此仅在「实际检出的就是 main 分支」时才用 KSU_COMMIT 作为期望值，否则用分支名。
-  KSU_ACTUAL_BRANCH_PRE=$(git -C KernelSU rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  if [ -n "${KSU_COMMIT:-}" ] && [ "$KSU_ACTUAL_BRANCH_PRE" = "main" ]; then
-    KSU_EXPECT_REF="$KSU_COMMIT"
-  else
-    if [ -n "${KSU_COMMIT:-}" ] && [ "$KSU_ACTUAL_BRANCH_PRE" != "main" ]; then
-      echo "KernelSU 对齐跳过：内核检出在 ${KSU_ACTUAL_BRANCH_PRE} 分支，与管理器构建所在的 main 分支拓扑不同，不使用 KSU_COMMIT=${KSU_COMMIT:0:9} 做期望值"
-    fi
-    KSU_EXPECT_REF="$BRANCH"
-  fi
+  # 因此是否采用 KSU_COMMIT 由**变体**决定，不能看检出的分支名：
+  #   - FinaSU 检出的就是 Release 对应 commit（detached，--abbrev-ref 返回 "HEAD"），
+  #     若按「分支名是不是 main」判断，会把它的期望值错降级成分支名 master；
+  #   - BakaSU 同样会 checkout --detach "$KSU_COMMIT"（detached 时也是 "HEAD"）；
+  #   - SukiSU 才是那个「从未执行 KSU_COMMIT 检出」的变体。
+  # 判据：只有 SukiSU 系忽略 KSU_COMMIT，其余变体在有 KSU_COMMIT 时一律以它为期望值。
+  case "${KSU_VARIANT}" in
+    SukiSU|SukiSU\(*\))
+      if [ -n "${KSU_COMMIT:-}" ]; then
+        echo "KernelSU 对齐跳过：SukiSU 内核走 ${BRANCH} 分支，与管理器构建所在的 main 分支拓扑不同，不使用 KSU_COMMIT=${KSU_COMMIT:0:9} 做期望值"
+      fi
+      KSU_EXPECT_REF="$BRANCH" ;;
+    *)
+      KSU_EXPECT_REF="${KSU_COMMIT:-$BRANCH}" ;;
+  esac
   if [ -d "KernelSU/.git" ] && [ -n "$KSU_EXPECT_REF" ]; then
     KSU_ACTUAL_BRANCH=$(git -C KernelSU rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     KSU_ACTUAL_HEAD=$(git -C KernelSU rev-parse HEAD 2>/dev/null || echo "")
