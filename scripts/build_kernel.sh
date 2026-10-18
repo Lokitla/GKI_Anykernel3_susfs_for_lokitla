@@ -1952,8 +1952,12 @@ stage_apply_susfs() {
   # 再让下面的 apply.sh 打内核侧补丁 —— 顺序反了会因 selinux_hide 形态不同而失配。
   # 它自己带 fail-closed（任一补丁失败 / 留 .rej / Kbuild 仍启用冲突对象都直接失败），
   # 这里仍然上抛，避免主循环关闭 set -e 时被吞掉。
+  # 注意 finasu_compat/apply.sh 的位置参数是**相对 $KERNEL_ROOT 的目录名**（默认 KernelSU），
+  # 脚本内部一律按 "$KERNEL_ROOT/$KSU_DIR" 拼接。这里必须只传 "KernelSU"，
+  # 传绝对路径会拼成 "$KERNEL_ROOT/$绝对路径"，变成不存在的双层路径。
   if [ "${KSU_VARIANT}" = "FinaSU" ]; then
-    bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "$KERNEL_ROOT/KernelSU" \
+    KERNEL_ROOT="$KERNEL_ROOT" SUSFS4KSU="$SUSFS4KSU" \
+      bash "$WORKSPACE/scripts/finasu_compat/apply.sh" "KernelSU" \
       || { cd "$_pwd"; return 1; }
     if grep -q 'ksu_patch_text' "$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"; then
       echo "::error::FinaSU SUSFS 适配后仍保留 ksu_patch_text，拒绝继续构建以避免 SELinux 隐藏冲突"
