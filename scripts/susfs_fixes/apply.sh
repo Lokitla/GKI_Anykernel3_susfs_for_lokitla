@@ -67,8 +67,8 @@ case "$KSU_VARIANT" in
 
     cd ..
     ;;
-  "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
-    echo "Next/SukiSU/SukiSU(40726)/SukiSU(40548)/BakaSU 使用内置 SUSFS 支持"
+  "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU"|"FinaSU")
+    echo "$KSU_VARIANT 的 SUSFS KernelSU 侧适配已由上游集成补丁提供"
     ;;
 esac
 
@@ -346,6 +346,86 @@ fix_statfs_susfs_decl
 # 同 fix_statfs_susfs_decl：实现已提升到「原始补丁探测」段，这里只调用。
 fix_show_smap_sus_map
 
+# 从补丁里取出它针对某个目标文件「新增」的代码行（去行首 +，排除 +++ 文件头），去重后输出。
+# 输出保留原始缩进：补丁是按行逐字节插入的，只有「整行（含缩进）完全相同」才算真的落进去了。
+# 去缩进后再比会把「A 行是 B 行的子串」算成命中 —— 实测（android12-5.10 主补丁：
+# 只把候选行的前 1/4 拼进基线）会拿到 50%~58% 的假高分，把没打完的补丁判成通过，属漏报。
+# 长度过滤按去缩进后的字符数算（>= 15），避免把 "}"、"#endif" 这类行算进分母。
+patch_added_lines_for() {
+  local patch="$1" target="$2"
+  # CR 用 -v 传进去再当正则用：awk 正则字面量里的 \r 不可移植
+  # （mawk 会把它当成字母 r），而变量里的真 \r 一定匹配自身。
+  awk -v target="$target" -v CR="$(printf '\r')" '
+    /^diff --git / { cur = ""; next }
+    /^\+\+\+ / {
+      cur = substr($0, 7)
+      sub(CR "$", "", cur)
+      sub(/[ \t].*$/, "", cur)
+      next
+    }
+    cur != target { next }
+    /^\+\+\+/ { next }
+    /^\+/ {
+      line = substr($0, 2)
+      sub(CR "$", "", line)
+      probe = line
+      sub(/^[ \t]+/, "", probe)
+      sub(/[ \t]+$/, "", probe)
+      if (length(probe) >= 15) print line
+    }
+  ' "$patch" | LC_ALL=C sort -u
+}
+
+# 核对补丁对某个文件的新增代码行是否真的落到源码树里。
+# 判据来源＝补丁自身，证据来源＝源码树，两者是不同产物，因此不是「写什么就 grep 什么」
+# 的同义反复；上游改名、换 SELinux 模型、换注入方式时判据自动跟随补丁更新，
+# 不会像写死的 my_setprocattr / my_sel_open_handle_status 那样腐烂成假阳性。
+# 判别力实测（android12-5.10 主补丁 vs AOSP 未打补丁基线）：命中 0 条。
+# 阈值取一半：全部应用时应为 100%，低于 50% 说明 hunk 被跳过、SELinux 隐藏没进去。
+verify_susfs_landing_file() {
+  local target="$1" srcfile="$2" label="$3"
+  if [ ! -f "$srcfile" ]; then
+    echo "::error title=SUSFS 未完整落地::${label} 不存在（$srcfile），补丁对它的注入无处可落"
+    return 1
+  fi
+  if [ ! -f "$SUSFS_PATCH" ]; then
+    echo "::error title=SUSFS 未完整落地::判据补丁 $SUSFS_PATCH 不在当前目录（$(pwd)），无法核对 ${label} 的新增代码是否落地"
+    return 1
+  fi
+
+  local total=0 matched=0 line
+  # 比对前把源码树的 CR 去掉：候选行已统一去掉行尾 CR，若补丁以 CRLF 形态被 patch 应用，
+  # 树里插入的行会带 \r，直接 -x 比对会全数落空 → 把完好的构建误判成失败（假阳性）。
+  local srccmp
+  srccmp="$(mktemp)"
+  tr -d '\r' < "$srcfile" > "$srccmp"
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    total=$((total + 1))
+    # -x 整行比对（含缩进），-F 走字面量避免补丁代码里的正则元字符被解释；
+    # 不用管道所以没有 pipefail + SIGPIPE 的假阳性。
+    if grep -qxF -- "$line" "$srccmp" 2>/dev/null; then
+      matched=$((matched + 1))
+    fi
+  done < <(patch_added_lines_for "$SUSFS_PATCH" "$target")
+  rm -f "$srccmp"
+
+  # 补丁对该文件没有新增行（只改上下文/只删行）时无从判定，不误报
+  if [ "$total" -eq 0 ]; then
+    return 0
+  fi
+
+  local pct=$((matched * 100 / total))
+  if [ "$pct" -lt 50 ]; then
+    echo "::error title=SUSFS 未完整落地::${label} 仅 ${matched}/${total} 行（${pct}%）新增代码进入源码树，SELinux 隐藏未完整生效"
+    echo "::error::判据取自补丁自身对 $target 的新增行，全部应用时应为 100%"
+    return 1
+  fi
+  echo "${label} 落地校验通过：补丁新增代码 ${matched}/${total} 行（${pct}%）已在源码树"
+  return 0
+}
+
 # patch 退出码 1 也可能只是「部分 hunk 被跳过」而不留 .rej，所以不能只看返回值，
 # 必须核对产物：SUSFS 是否真的进了编译、SELinux 钩子是否真的注入
 verify_susfs_landing() {
@@ -356,22 +436,24 @@ verify_susfs_landing() {
   [ -f fs/susfs.c ] \
     || missing+=("fs/susfs.c 不存在，SUSFS 源文件未落地")
 
-  # 只在补丁确实要改这些文件时校验，避免补丁改版后误报
-  if grep -q 'b/security/selinux/hooks\.c' "$SUSFS_PATCH" 2>/dev/null \
-    && ! grep -q 'my_setprocattr' security/selinux/hooks.c 2>/dev/null; then
-    missing+=("security/selinux/hooks.c 未注入 my_setprocattr，SELinux 隐藏不会生效")
-  fi
-  if grep -q 'b/security/selinux/selinuxfs\.c' "$SUSFS_PATCH" 2>/dev/null \
-    && ! grep -qE 'my_sel_open_handle_status|my_write_access|my_write_context' security/selinux/selinuxfs.c 2>/dev/null; then
-    missing+=("security/selinux/selinuxfs.c 未注入 status/access/context 钩子，/sys/fs/selinux 会泄漏真实上下文")
-  fi
-
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "::error title=SUSFS 未完整落地::检测到 ${#missing[@]} 处缺失，内核会假装正常但 SUSFS 实际不生效"
     printf '  - %s\n' "${missing[@]}"
     exit 1
   fi
-  echo "SUSFS 落地校验通过：susfs.o 已进编译、SELinux 钩子已注入"
+
+  # 只在补丁确实要改该文件时才校验，避免补丁改版后误报。
+  # 判据不写死符号名：旧版这里查 my_setprocattr / my_sel_open_handle_status，
+  # 而 5.10 的补丁早已换成 ksu_selinux_hide_running、should_check_current、
+  # fake_state 这套新模型，写死的名字必然查不到 → 假阳性把正常构建判死。
+  # 现在改成「补丁对该文件的新增代码行是否真的进了源码树」。
+  local target
+  for target in security/selinux/hooks.c security/selinux/selinuxfs.c; do
+    grep -qF "b/$target" "$SUSFS_PATCH" 2>/dev/null || continue
+    verify_susfs_landing_file "$target" "$target" "$(basename "$target")" || exit 1
+  done
+
+  echo "SUSFS 落地校验通过：susfs.o 已进编译、SELinux 补丁新增代码已进入源码树"
 }
 
 # 在编译前核对 SUSFS 主补丁的冲突文件，上游自带的 .rej 不计入
@@ -389,6 +471,106 @@ if [ "$SUSFS_REJ_COUNT" -gt 0 ]; then
 fi
 
 verify_susfs_landing
+# ---------------------------------------------------------------------------
+# FinaSU/BakaSU 新 selinux_hide 模型适配：fake_state -> backup_sepolicy
+#
+# BakaSU（d7260ca1 起）把 fake_state 换成了自有的 struct selinux_policy
+# *backup_sepolicy 与 security_*_with_policy() 系列（kernel/feature/selinux_hide.c），
+# 而 SUSFS 主补丁仍按旧模型声明 extern struct selinux_state fake_state，
+# 链接期必然 undefined symbol: fake_state。这里按新模型改写补丁落地的引用。
+#
+# 触发条件（三条同时成立才适配，否则原样放行）：
+#   1) KernelSU/kernel/feature/selinux_hide.c 存在；
+#   2) 该文件不含 fake_state（上游已切到 backup_sepolicy 新模型）；
+#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c} 里含 &fake_state。
+#
+# 定位思路参考 LingLuo17/GKI_KernelSU_SUSFS（GPL-2.0）与 BakaSU
+# kernel/feature/selinux_hide.c 的调用范例；本实现按本仓库的失败处理约定重写，
+# 未复制其代码：每个待替换串必须恰好命中一次，替换后残留 fake_state 即报错退出。
+adapt_finasu_selinux_hide_model() {
+  local hide_c="$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"
+  local hooks_c="security/selinux/hooks.c"
+  local selinuxfs_c="security/selinux/selinuxfs.c"
+
+  if [ ! -f "$hide_c" ]; then
+    echo "SELinux 模型适配：无 KernelSU/kernel/feature/selinux_hide.c，跳过"
+    return 0
+  fi
+  if grep -q "fake_state" "$hide_c"; then
+    echo "SELinux 模型适配：上游 selinux_hide.c 仍是 fake_state 旧模型，跳过"
+    return 0
+  fi
+  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null; then
+    echo "SELinux 模型适配：源码树未引用 fake_state，跳过"
+    return 0
+  fi
+
+  echo "SELinux 模型适配：BakaSU 新 selinux_hide 模型，改写 SUSFS 补丁的 fake_state 引用"
+  local PY=""
+  local cand
+  for cand in python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+  done
+  if [ -z "$PY" ]; then
+    echo "::error title=SELinux 模型适配::既无 python3 也无 python，无法改写 fake_state 引用"
+    return 1
+  fi
+
+  "$PY" - "$hooks_c" "$selinuxfs_c" <<'PY'
+import io
+import sys
+
+DECL = (
+    "extern struct selinux_policy *backup_sepolicy;\n"
+    "extern int security_context_to_sid_with_policy(struct selinux_policy *policy, const char *scontext, u32 scontext_len, u32 *sid, u32 def_sid, gfp_t gfp_flags, u32 *orig_sid_p, int *orig_rc_p);\n"
+    "extern int security_sid_to_context_with_policy(struct selinux_policy *policy, u32 sid, char **scontext, u32 *scontext_len);\n"
+    "extern void security_compute_av_user_with_policy(struct selinux_policy *policy, u32 ssid, u32 tsid, u16 tclass, struct av_decision *avd);"
+)
+
+TOSID = "security_context_to_sid_with_policy(backup_sepolicy, %s, %s, %s, SECSID_NULL, GFP_KERNEL, NULL, NULL)"
+
+RULES = [
+    ("extern struct selinux_state fake_state;", DECL),
+    ("security_context_to_sid(&fake_state, buf, size, &sid, GFP_KERNEL)", TOSID % ("buf", "size", "&sid")),
+    ("security_context_to_sid(&fake_state, value, size, &tmp_sid, GFP_KERNEL)", TOSID % ("value", "size", "&tmp_sid")),
+    ("security_sid_to_context(&fake_state, sid, &canon, &len)", "security_sid_to_context_with_policy(backup_sepolicy, sid, &canon, &len)"),
+    ("security_context_str_to_sid(&fake_state, scon, &ssid, GFP_KERNEL)", TOSID % ("scon", "strlen(scon)", "&ssid")),
+    ("security_context_str_to_sid(&fake_state, tcon, &tsid, GFP_KERNEL)", TOSID % ("tcon", "strlen(tcon)", "&tsid")),
+    ("security_compute_av_user(&fake_state, ssid, tsid, tclass, &avd)", "security_compute_av_user_with_policy(backup_sepolicy, ssid, tsid, tclass, &avd)"),
+]
+
+replaced = 0
+for path in sys.argv[1:]:
+    with io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        src = fh.read()
+    out = src
+    for old, new in RULES:
+        hits = out.count(old)
+        if hits == 0:
+            continue
+        if hits != 1:
+            print("::error title=SELinux 模型适配::" + path + " 中待替换串出现 %d 次（期望 1 次）：" % hits + old)
+            sys.exit(1)
+        out = out.replace(old, new)
+        replaced += 1
+    with io.open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        fh.write(out)
+
+leftover = []
+for path in sys.argv[1:]:
+    with io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        if "fake_state" in fh.read():
+            leftover.append(path)
+
+if leftover:
+    print("::error title=SELinux 模型适配::改写后仍有 fake_state 残留：" + " ".join(leftover))
+    sys.exit(1)
+
+print("SELinux 模型适配：完成 " + str(replaced) + " 处改写，无 fake_state 残留")
+PY
+}
+
+adapt_finasu_selinux_hide_model
 
 # 还原仅用于补丁匹配的临时源码调整
 if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then

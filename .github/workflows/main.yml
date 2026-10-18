@@ -39,6 +39,7 @@ on:
           - SukiSU(40726)
           - SukiSU(40548)
           - BakaSU
+          - FinaSU
           - Official
           # Next 变体已在 build.py 与 kernel-custom.yml 支持（build.py:32 / kernel-custom.yml:27-32），
           # 但 main.yml 手动入口未启用：其 workflow_dispatch 的 input 名额有限，
@@ -87,7 +88,7 @@ on:
         type: boolean
         default: true
       export_susfs_patches:
-        description: "收集 SUSFS 集成补丁（仅 SukiSU / BakaSU）"
+        description: "收集 SUSFS 集成补丁（SukiSU / BakaSU / FinaSU）"
         type: boolean
         default: true
 
@@ -169,7 +170,7 @@ on:
       # 自动触发（Auto_Trigger）已占满 24 个必需字段，手动专用项只能留一个（保留 version）。
       # 其转发处用 ${{ inputs.ksu_branch_mode || 'auto' }} 兜底，不声明时自然回退 auto。
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定"
+        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定。FinaSU 始终对齐官方 Release"
         required: false
         type: string
         default: ""
@@ -212,8 +213,10 @@ jobs:
       manager_commit: ${{ inputs.manager_commit }}
       # ksu_mode 不传：build.yml 默认「关闭」（正常集成 KernelSU）。
       ksu_branch_mode: ${{ inputs.ksu_branch_mode || 'auto' }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
       ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
       # 以下两项目前仍未在手动界面暴露（25 个 input 名额已用满）：
       #   skip_incompatible —— 可选阶段失败时降级为 warning 而非中断
       #   ksu_branch_mode   —— 上方已注明，不声明时自然回退 auto
@@ -247,8 +250,10 @@ jobs:
       supp_op: ${{ inputs.supp_op || false }}
       manager_commit: ${{ inputs.manager_commit }}
       ksu_branch_mode: ${{ inputs.ksu_branch_mode || 'auto' }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
       ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
       # 以下两项目前仍未在手动界面暴露（25 个 input 名额已用满）：
       #   skip_incompatible —— 可选阶段失败时降级为 warning 而非中断
       #   ksu_branch_mode   —— 上方已注明，不声明时自然回退 auto
@@ -282,8 +287,10 @@ jobs:
       supp_op: ${{ inputs.supp_op || false }}
       manager_commit: ${{ inputs.manager_commit }}
       ksu_branch_mode: ${{ inputs.ksu_branch_mode || 'auto' }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
       ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
       # 以下两项目前仍未在手动界面暴露（25 个 input 名额已用满）：
       #   skip_incompatible —— 可选阶段失败时降级为 warning 而非中断
       #   ksu_branch_mode   —— 上方已注明，不声明时自然回退 auto
@@ -317,8 +324,10 @@ jobs:
       supp_op: ${{ inputs.supp_op || false }}
       manager_commit: ${{ inputs.manager_commit }}
       ksu_branch_mode: ${{ inputs.ksu_branch_mode || 'auto' }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
       ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
       # 以下两项目前仍未在手动界面暴露（25 个 input 名额已用满）：
       #   skip_incompatible —— 可选阶段失败时降级为 warning 而非中断
       #   ksu_branch_mode   —— 上方已注明，不声明时自然回退 auto
@@ -352,8 +361,10 @@ jobs:
       supp_op: ${{ inputs.supp_op || false }}
       manager_commit: ${{ inputs.manager_commit }}
       ksu_branch_mode: ${{ inputs.ksu_branch_mode || 'auto' }}
-      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU 生效）
+      # 内核对齐：KernelSU 检出到所选 Manager 构建同一提交（BakaSU / FinaSU 生效）
       ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
+      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
+      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
       # 以下两项目前仍未在手动界面暴露（25 个 input 名额已用满）：
       #   skip_incompatible —— 可选阶段失败时降级为 warning 而非中断
       #   ksu_branch_mode   —— 上方已注明，不声明时自然回退 auto
@@ -480,9 +491,9 @@ jobs:
 
   # ==================== 收集 SUSFS 集成补丁 ====================
   # 汇总各构建任务导出的 SUSFS 集成补丁，打成一个 zip 供 Release 分发
-  # 仅 SukiSU / BakaSU 且启用 SUSFS 时有产物
+  # SukiSU / BakaSU / FinaSU 且启用 SUSFS 时有产物
   collect-susfs-patches:
-    if: ${{ !cancelled() && inputs.export_susfs_patches && inputs.enable_susfs && (inputs.kernelsu_variant == 'SukiSU' || inputs.kernelsu_variant == 'BakaSU') }}
+    if: ${{ !cancelled() && inputs.export_susfs_patches && inputs.enable_susfs && (inputs.kernelsu_variant == 'SukiSU' || inputs.kernelsu_variant == 'BakaSU' || inputs.kernelsu_variant == 'FinaSU') }}
     runs-on: ubuntu-24.04
     needs:
       - build-a12-5-10
@@ -681,6 +692,7 @@ jobs:
             "Official")  KSU_NAME="KernelSU" ;;
             "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") KSU_NAME="SukiSU" ;;
             "BakaSU")  KSU_NAME="BakaSU" ;;
+            "FinaSU")  KSU_NAME="FinaSU" ;;
           esac
           echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
 
@@ -698,7 +710,8 @@ jobs:
           # 否则 Release 列表会挂着「支持（已修补镜像）」，实际却加载不了 KPM 模块。
           if [[ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]] \
              || [[ "${{ inputs.kernelsu_variant }}" == "Official" ]] \
-             || [[ "${{ inputs.kernelsu_variant }}" == "Next" ]]; then
+             || [[ "${{ inputs.kernelsu_variant }}" == "Next" ]] \
+             || [[ "${{ inputs.kernelsu_variant }}" == "FinaSU" ]]; then
             echo "KPM_STATUS=不支持（变体未提供 KPM）" >> $GITHUB_ENV
           elif [[ "${{ inputs.use_kpm }}" == enabled* ]]; then
             echo "KPM_STATUS=支持" >> $GITHUB_ENV
@@ -709,7 +722,13 @@ jobs:
           fi
 
           # Hook 类型
-          if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] || [ "${{ inputs.kernelsu_variant }}" = "SukiSU(40726)" ] || [ "${{ inputs.kernelsu_variant }}" = "SukiSU(40548)" ] || [ "${{ inputs.kernelsu_variant }}" = "BakaSU" ]; then
+          if [ "${{ inputs.kernelsu_variant }}" = "FinaSU" ]; then
+            if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+              echo "HOOK_TYPE=SUSFS Manual Hooks" >> $GITHUB_ENV
+            else
+              echo "HOOK_TYPE=Inline Syscall Hooks" >> $GITHUB_ENV
+            fi
+          elif [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] || [ "${{ inputs.kernelsu_variant }}" = "SukiSU(40726)" ] || [ "${{ inputs.kernelsu_variant }}" = "SukiSU(40548)" ] || [ "${{ inputs.kernelsu_variant }}" = "BakaSU" ]; then
             echo "HOOK_TYPE=SUSFS Inline Hooks" >> $GITHUB_ENV
           else
             echo "HOOK_TYPE=KPROBE Hooks" >> $GITHUB_ENV
@@ -772,6 +791,7 @@ jobs:
               fi
               ;;
             "BakaSU") BRANCH="main" ;;
+            "FinaSU") BRANCH="master" ;;
             "Next") BRANCH="dev" ;;
             *) echo "错误: 未知变体" >&2; exit 1 ;;
           esac
@@ -781,12 +801,15 @@ jobs:
       # ==================== 获取 KernelSU 提交信息 ====================
       # 获取当前使用的 KernelSU 版本的 Git 提交信息
       - name: 获取 KernelSU 提交信息
+        env:
+          MANAGER_KSU_COMMIT: ${{ needs.get-manager.outputs.ksuCommit }}
         run: |
           case "${{ inputs.kernelsu_variant }}" in
             "Official") REPO_URL="https://github.com/tiann/KernelSU.git"; REPO_URL2="tiann/KernelSU" ;;
             "Next") REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"; REPO_URL2="KernelSU-Next/KernelSU-Next" ;;
             "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"; REPO_URL2="SukiSU-Ultra/SukiSU-Ultra" ;;
             "BakaSU") REPO_URL="https://github.com/Baka-SU/BakaSU.git"; REPO_URL2="Baka-SU/BakaSU" ;;
+            "FinaSU") REPO_URL="https://github.com/LyraVoid/FinaSU.git"; REPO_URL2="LyraVoid/FinaSU" ;;
           esac
 
           if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] && [ -f "config/config" ]; then
@@ -797,6 +820,11 @@ jobs:
               KSU_URL="https://github.com/$REPO_URL2/commit/$CUSTOM_COMMIT"
               echo "BRANCH_INFO=custom" >> $GITHUB_ENV
             fi
+          fi
+
+          if [ "${{ inputs.kernelsu_variant }}" = "FinaSU" ] && [ -n "$MANAGER_KSU_COMMIT" ]; then
+            KSU_REF="$MANAGER_KSU_COMMIT"
+            KSU_URL="https://github.com/$REPO_URL2/commit/$MANAGER_KSU_COMMIT"
           fi
 
           if [ -z "${KSU_REF:-}" ]; then
@@ -918,7 +946,7 @@ jobs:
           | \`boot.img\` / \`boot-gz.img\` / \`boot-lz4.img\` | 可直接刷入的 boot 镜像（boot-lz4 仅在 Image.lz4 重建成功时产出，否则仅有前两者） |
           | \`*.apk\` | KernelSU 管理器 |
           | \`susfs-*.zip\` | SUSFS 配套模块 |
-          | \`SUSFS-Patches-*.zip\` | SUSFS 集成补丁（仅 SukiSU / BakaSU，供自行编译内核使用） |
+          | \`SUSFS-Patches-*.zip\` | SUSFS 集成补丁（SukiSU / BakaSU / FinaSU，供自行编译内核使用） |
 
           > [!IMPORTANT]
           > 刷入前请备份原厂 Boot 镜像。

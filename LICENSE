@@ -1,28 +1,4 @@
-SPDX-License-Identifier: GPL-2.0-or-later
-
-Copyright (C) 2024-2026 Lokitla
-
-【分层授权】本仓库由多个上游项目融合而成（融合说明见 FUSION.md），
-不同来源的代码适用不同的许可条款，不适用单一授权：
-
-  1. 上游继承部分
-     衍生自上游 zzh20188/GKI_KernelSU_SUSFS 及其上游的代码 —— GPL-2.0-or-later。
-     本仓库统一采用 "or-later" 条款，兼容 GPL-3.0 及后续版本组件。
-
-  2. 本仓库新增部分
-     本仓库自身编写的构建脚本、工作流与文档 —— GPL-2.0-or-later。
-
-  3. 构建产物
-     内核镜像、AnyKernel3 刷机包、boot 镜像 —— GPL-2.0-or-later，
-     受 Linux 内核 GPL-2.0（含 syscall 例外）约束。
-
-  4. 第三方组件
-     构建期从各上游拉取的组件各保留其原有许可，不因被本仓库引用而改变。
-     构建期引入的 GPL-3.0 组件（如 NoMount、ShirkNeko/susfs4ksu）
-     受 "or-later" 条款覆盖，可与本仓库 GPL-2.0 代码共存。
-     逐项归属、许可状态与退出方式见 NOTICE 与 THIRD_PARTY_NOTICES.md。
-
-下文为 GNU General Public License v2 完整条款文本（未作删改）。
+GNU GPL version 2 license text follows. Copyright (C) 2024-2026 Lokitla for original repository material only. For original material in this repository for which the project has licensing rights, and where no file-level notice says otherwise, this repository uses GPL-2.0. This file does not relicense third-party material or establish that every build output is license-compatible. See NOTICE and THIRD_PARTY_NOTICES.md for sources and known issues.
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991

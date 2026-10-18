@@ -42,3 +42,12 @@ Thumbs.db
 
 # Local helper scripts
 .rebase_auto.sh
+
+# Local scratch/temp dirs (排查用，不进版本库)
+.tmp_probe/
+.tmp_merge/
+
+# Agent 交接记录（本地文件，不提交）
+agent.md
+agentnext.md
+PUSH_RESULT.txt

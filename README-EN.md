@@ -60,7 +60,8 @@ Linux 6.12 is not included in the `auto` matrix. To build it, run the Android 16
 
 Optional features are controlled by workflow inputs or local CLI flags. Available options vary by entry point; see the [local build guide](docs/local-build-en.md) and the relevant workflow for details.
 
-- KernelSU variants: SukiSU, BakaSU, Official, Next, and retained legacy SukiSU builds.
+- KernelSU variants: SukiSU, BakaSU, FinaSU, Official, Next, and retained legacy SukiSU builds.
+  The three main variants (SukiSU / BakaSU / FinaSU) integrate SUSFS by different routes; see [Variants and SUSFS](#variants-and-susfs).
 - SUSFS integration and patch adaptation, with optional patch export.
 - ZRAM/LZ4KD optimization; Linux 6.12 uses patches maintained in this repository.
 - Optional KPM, BBR and network configuration, Baseband Guard, Re-Kernel, NoMount, Droidspaces/NTSync, and GhostLock fixes.
@@ -68,6 +69,34 @@ Optional features are controlled by workflow inputs or local CLI flags. Availabl
 - Build failure logs, rejected-patch summaries, and GitHub Actions summaries.
 
 **Compatibility:** KPM is skipped automatically on Linux 6.10 and newer. For Linux 6.12, enable ZRAM as needed. Device ROMs and kernel configurations can vary; review the feature guide and build records before flashing.
+
+## Variants and SUSFS
+
+The three main variants integrate SUSFS by three different routes, and picking the wrong one either breaks the build or produces a kernel with non-functional hiding. The table reflects actual code behaviour in [`scripts/build_kernel.sh`](scripts/build_kernel.sh).
+
+| Variant | How SUSFS is integrated | Manager source | Notes |
+|---|---|---|---|
+| **SukiSU** | Upstream KernelSU ships built-in SUSFS support; this repository only does UAPI alignment and context adaptation | [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) Actions artifacts | With SUSFS enabled the `builtin` branch is selected automatically; the `main` branch conflicts with SUSFS and requires an explicit opt-in |
+| **BakaSU** | Upstream KernelSU ships built-in SUSFS support, but upstream **suspends** SUSFS builds; this repository decides per tree based on in-tree evidence | [BakaSU](https://github.com/Baka-SU/BakaSU) Actions artifacts | The upstream `susfs_compat.mk` still carries an unconditional `$(error)`; support is decided after the patch lands by [`scripts/bakasu_compat/resume_susfs.sh`](scripts/bakasu_compat/resume_susfs.sh), and a failed decision aborts the build |
+| **FinaSU** | Uses the **upstream KernelSU-side SUSFS patch plus a structural adaptation patch** from this repository (`scripts/finasu_compat/`), a different shape from the two above | Official [FinaSU](https://github.com/LyraVoid/FinaSU) release APK | Kernel and manager must align on the same release: the build clones FinaSU, checks out the commit behind that release, and installs the manager APK signing certificate into the kernel trust list — otherwise the manager cannot recognize the kernel |
+| **Official / Next** | No built-in SUSFS; Official additionally needs the upstream `10_enable_susfs_for_ksu.patch` | [KernelSU](https://github.com/tiann/KernelSU) / [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) | KernelSU-Next `dev` has no `KSU_SUSFS_*` switches, so SUSFS cannot be enabled together with it |
+
+Additional notes:
+
+- **SUSFS patch source**: BakaSU and SukiSU clone `gki-<android>-<kernel>` from [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu); SukiSU first tries the ShirkNeko fork and falls back to upstream when the branch is missing. The branch always tracks upstream instead of pinning a commit (pass `susfs_commit` to pin).
+- **The BakaSU suspension is not caused by this repository**: upstream has disabled SUSFS builds since `48fa4bb`, waiting for simonpunk to sync the new `selinux_hide` model. This repository does not wave that through unconditionally — it inspects the real in-tree shape once the patch has landed (< 6.6 checks the manual hook and `should_check_current` in `hooks.c`; >= 6.6 checks the `_with_policy` model in `selinuxfs.c`, and a `backup_sepolicy` shape also qualifies) and fails loudly rather than producing a kernel that bypasses upstream caution.
+- **FinaSU uses a different SELinux model**: upstream FinaSU removed `fake_state` in favour of `backup_sepolicy` plus `security_*_with_policy`. The SUSFS patch still references `fake_state`, so after the patch lands this repository rewrites those references (`adapt_finasu_selinux_hide_model` in [`scripts/susfs_fixes/apply.sh`](scripts/susfs_fixes/apply.sh)); if the rewrite does not match exactly once or leaves residue, the build aborts.
+- **FinaSU's kernel-side integration script comes from [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)**: `scripts/finasu_compat/apply.sh` is ported from that repository's commit `d6255c5f44e3871743c7d1570436822227b4b2fd` (GPL-3.0-only), and `extract_manager_cert.py` from commit `fb8379aa781f9e94cabee2c12f543144035b5da3`. Source, licensing, and the changes made here are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **Automatic trigger coverage**: `Auto_Trigger_BakaSU.yml` and `Auto_Trigger_SukiSU.yml` only track those two variants; FinaSU currently needs a manual build.
+
+### Version alignment and tracking policy
+
+The general convention here is **"track upstream head unless explicitly pinned"** — versions are only locked when you pass an explicit hash/tag:
+
+- **KernelSU checkout**: SukiSU uses `main` or `builtin` (automatically `builtin` when SUSFS is enabled); BakaSU / FinaSU align to the same commit as the selected manager build, so the kernel KernelSU version matches the manager APK exactly.
+- **SUSFS patch source**: always clones the head of the upstream `gki-<android>-<kernel>` branch, never pinned; pass `susfs_commit` when you need reproducibility.
+- **KernelSU UAPI version**: the target value is read from `supercall.h` **on the branch the kernel actually checks out** — `main` keeps it at `uapi/supercall.h`, `builtin` at `kernel/include/uapi/supercall.h`, and the two evolve independently. This avoids rewriting a BakaSU kernel to a SukiSU version number.
+- **KPM patch tool**: follows [SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch) upstream head and **never blocks a build**. `config/kpm_patch_sha256` merely records what upstream looked like at the last build; when it drifts, the build logs a `::warning::` and continues. Only an explicitly passed `kpm_patch_sha256` triggers a fail-closed comparison. Use `scripts/tools/pin_kpm_patch.sh` to refresh the recorded value.
 
 ## Local build
 
@@ -84,13 +113,20 @@ See [`docs/local-build-en.md`](docs/local-build-en.md) for prerequisites, option
 
 Scheduled workflows check for updates to SukiSU and BakaSU and can trigger builds according to their configuration. See `.github/workflows/Auto_Trigger_*.yml` for trigger scope, build options, and required repository permissions.
 
+FinaSU is not wired into the scheduled triggers yet; run a build entry manually when needed. The SUSFS patch source and KernelSU variants are pulled at upstream head during each build, so the same entry can produce different SUSFS revisions on different days. Use the commit-hash input to pin the manager/kernel KernelSU commit when a reproducible artifact matters.
+
 ## Repository layout
 
 | Path | Contents |
 |---|---|
 | `.github/workflows/` | Build, release, manager download, and data update workflows |
 | `scripts/build_kernel.sh` | Build steps shared by Actions and the local CLI |
-| `scripts/susfs_fixes/` | SUSFS patch adaptation scripts |
+| `scripts/susfs_fixes/` | SUSFS main patch application and context adaptation (including SELinux model rewrites) |
+| `scripts/bakasu_compat/` | BakaSU upstream SUSFS suspension decision and release |
+| `scripts/finasu_compat/` | FinaSU structural adaptation patch and application |
+| `scripts/sukisu_compat/` | SukiSU compatibility patches |
+| `scripts/ksu_uapi_sync/` | Kernel-side KernelSU UAPI alignment |
+| `scripts/get_manager.sh` | Manager and manager artifact retrieval (invoked by workflows) |
 | `data/` | Android and kernel version data |
 | `config/` | Kernel configuration fragments |
 | `security_patch/` | Optional security fixes |
@@ -102,4 +138,4 @@ Scheduled workflows check for updates to SukiSU and BakaSU and can trigger build
 
 This project includes code, patches, and configuration from multiple upstream projects and cannot be described by a single license. The current review found that the SUSFS kernel patches are marked GPL-3.0-or-later, while the Linux kernel is GPL-2.0-only. Combining them in one kernel build presents a license-compatibility risk. This repository's `LICENSE` and notices cannot remove that risk. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Major upstream projects include [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS), [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3), [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra), [KernelSU](https://github.com/tiann/KernelSU), and [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu). See [NOTICE](NOTICE) for the full list.
+Major upstream projects include [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS), [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3), [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra), [FinaSU](https://github.com/LyraVoid/FinaSU), [KernelSU](https://github.com/tiann/KernelSU), and [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu). FinaSU is integrated into manager retrieval, kernel version alignment, and second signing-certificate trust configuration. See [NOTICE](NOTICE) for source and license information.

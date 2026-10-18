@@ -198,7 +198,16 @@ shell 逻辑的，日常维护不需要再运行它。
    描述里注明，属于"让开关说真话"的止血，不是恢复功能）。
 2. **6.12 的 KPM**：脚本在内核 ≥ 6.10 时强制 `KPM_SUPPORTED=0`，与 LingLuo 无关，
    属上游限制。6.12 入口的 `use_kpm` 默认已改为 `disabled (关闭)`。
-3. **UAPI 同步**（`scripts/ksu_uapi_sync/builtin-uapi4.patch` 及对齐逻辑）未移植。
+3. **UAPI 同步**：已移植（beta 分支），但实现方式与上游不同 —— 不用上游那个会腐烂的静态
+   `builtin-uapi4.patch`，改为 `scripts/ksu_uapi_sync/align.sh` 在构建时读内核侧
+   `KERNEL_SU_UAPI_VERSION`，与上游 `main` 的实际取值动态对齐（并补 `KSU_GET_INFO_FLAG_BUNDLED`），
+   由 `build_kernel.sh` 的 `sync_ksu_uapi` 阶段在编译前调用。
+   原因：上游同一个补丁一个多月内改了两版（`1bb9d909` 重生成、`b2f2598c` 把 4 改 5），
+   且 `1bb9d909` 的提交说明本身就是「上游 builtin 合并 su-session 后各 hunk 被判为
+   reversed/previously-applied，导致每个 SukiSU 矩阵构建中止」——静态 patch 会随上游漂移而腐烂，
+   本仓库要跟随上游更新，因此选择动态对齐。
+   → 后果：SukiSU 走 `builtin` 分支时内核 UAPI 落后于 `main` 构建的管理器 APK，
+   管理器首页会误报「需要更新内核」；本机制消除该误报。
 
 ### 强烈建议不要移植的一项
 

@@ -32,6 +32,14 @@ permissions:
         required: false
         type: string
         default: ""
+      ksu_cert_size:
+        required: false
+        type: string
+        default: ""
+      ksu_cert_hash:
+        required: false
+        type: string
+        default: ""
       ksu_mode:
         description: "KernelSU 模式：关闭=正常集成 KernelSU / 禁用KSU=不集成任何 KernelSU 代码（SUSFS 的启停由 enable_susfs 独立控制）"
         required: false
@@ -169,9 +177,10 @@ permissions:
         required: false
         type: string
         default: ""
-      # kpm_patch_sha256 已从所有手动入口隐藏：留空即不校验，是唯一常规用法。
-      # 底层校验逻辑（EXPECTED_KPM_PATCH_SHA256）保留在 build_kernel.sh 中，
-      # 本地 build.py --kpm-patch-sha256 仍可显式传入。
+      # kpm_patch_sha256 已从所有手动入口隐藏。项目约定：所有提交/工具「不指定即跟随上游最新」，
+      # 上游更新 patch_linux 属正常行为，不应让构建失败。
+      #   - 留空（CI 的常规用法）：build_kernel.sh 只读 config/kpm_patch_sha256 做**漂移告警**并继续；
+      #   - 本地 build.py --kpm-patch-sha256 显式传入：才做 fail-closed 比对，不符即中止。
 jobs:
   build-kernel:
     name: ${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}
@@ -199,6 +208,7 @@ jobs:
       # 安全：外部输入一律经 env 传入，run 块中不出现 ${{ }}
       env:
         MANAGER_COMMIT: ${{ inputs.manager_commit }}
+        KSU_VARIANT_IN: ${{ inputs.ksu_variant }}
         SUKISU_COMMIT_IN: ${{ inputs.sukisu_commit }}
         SUSFS_COMMIT_IN: ${{ inputs.susfs_commit }}
       run: |
@@ -229,7 +239,10 @@ jobs:
             echo "::warning::管理器提交 hash 超过两段，已忽略第 3 段及之后的内容"
           fi
           # 只有显式给出（非 0、非空）的段才覆盖
-          if [ -n "$seg1" ]; then sukisu="$seg1"; fi
+          if [ -n "$seg1" ] && [ "$KSU_VARIANT_IN" != "FinaSU" ]; then sukisu="$seg1"; fi
+          if [ -n "$seg1" ] && [ "$KSU_VARIANT_IN" = "FinaSU" ]; then
+            echo "::warning::FinaSU 管理器与内核固定跟随同一官方 Release；忽略手动管理器 hash，SUSFS hash 仍按第 2 段处理"
+          fi
           if [ -n "$seg2" ]; then susfs="$seg2"; fi
         fi
         # 只接受 40 位（SHA-1）或 64 位（SHA-256）十六进制提交号。
@@ -394,6 +407,8 @@ jobs:
         # BakaSU 对齐：内核 KernelSU 检出到该提交（空=跟随 main HEAD）。
         # 优先级：合并输入框第 1 段（管理器&内核KSU 共用）> 本 input（承载自动对齐值）。
         KSU_COMMIT: ${{ steps.resolve_commits.outputs.ksu_commit || inputs.ksu_commit }}
+        KSU_CERT_SIZE: ${{ inputs.ksu_cert_size }}
+        KSU_CERT_HASH: ${{ inputs.ksu_cert_hash }}
         # SUSFS 原始补丁探测：apply.sh 是 build_kernel.sh 的 bash 子进程，
         # 这三个开关在这里给出才能一路透到 apply.sh；缺失的话 apply.sh 里
         # ${SUSFS_RAW_PROBE:-false} 恒为 false，探测会静默退化成常规构建。
