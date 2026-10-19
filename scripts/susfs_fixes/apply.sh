@@ -448,7 +448,7 @@ verify_susfs_landing() {
   # fake_state 这套新模型，写死的名字必然查不到 → 假阳性把正常构建判死。
   # 现在改成「补丁对该文件的新增代码行是否真的进了源码树」。
   local target
-  for target in security/selinux/hooks.c security/selinux/selinuxfs.c; do
+  for target in security/selinux/hooks.c security/selinux/selinuxfs.c security/selinux/ss/services.c; do
     grep -qF "b/$target" "$SUSFS_PATCH" 2>/dev/null || continue
     verify_susfs_landing_file "$target" "$target" "$(basename "$target")" || exit 1
   done
@@ -478,11 +478,13 @@ verify_susfs_landing
 # *backup_sepolicy 与 security_*_with_policy() 系列（kernel/feature/selinux_hide.c），
 # 而 SUSFS 主补丁仍按旧模型声明 extern struct selinux_state fake_state，
 # 链接期必然 undefined symbol: fake_state。这里按新模型改写补丁落地的引用。
+# 31eb14add 起补丁新增 services.c 段，my_security_context_to_sid_core 里也引用 fake_state，
+# 故改写范围必须同时覆盖 security/selinux/ss/services.c，否则链接期同样 undefined。
 #
 # 触发条件（三条同时成立才适配，否则原样放行）：
 #   1) KernelSU/kernel/feature/selinux_hide.c 存在；
 #   2) 该文件不含 fake_state（上游已切到 backup_sepolicy 新模型）；
-#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c} 里含 &fake_state。
+#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c,ss/services.c} 里含 &fake_state。
 #
 # 定位思路参考 LingLuo17/GKI_KernelSU_SUSFS（GPL-2.0）与 BakaSU
 # kernel/feature/selinux_hide.c 的调用范例；本实现按本仓库的失败处理约定重写，
@@ -491,6 +493,7 @@ adapt_finasu_selinux_hide_model() {
   local hide_c="$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"
   local hooks_c="security/selinux/hooks.c"
   local selinuxfs_c="security/selinux/selinuxfs.c"
+  local services_c="security/selinux/ss/services.c"
 
   if [ ! -f "$hide_c" ]; then
     echo "SELinux 模型适配：无 KernelSU/kernel/feature/selinux_hide.c，跳过"
@@ -500,7 +503,9 @@ adapt_finasu_selinux_hide_model() {
     echo "SELinux 模型适配：上游 selinux_hide.c 仍是 fake_state 旧模型，跳过"
     return 0
   fi
-  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null; then
+  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null \
+    && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null \
+    && ! grep -q "&fake_state" "$services_c" 2>/dev/null; then
     echo "SELinux 模型适配：源码树未引用 fake_state，跳过"
     return 0
   fi
@@ -516,7 +521,7 @@ adapt_finasu_selinux_hide_model() {
     return 1
   fi
 
-  "$PY" - "$hooks_c" "$selinuxfs_c" <<'PY'
+  "$PY" - "$hooks_c" "$selinuxfs_c" "$services_c" <<'PY'
 import io
 import sys
 
@@ -531,6 +536,7 @@ TOSID = "security_context_to_sid_with_policy(backup_sepolicy, %s, %s, %s, SECSID
 
 RULES = [
     ("extern struct selinux_state fake_state;", DECL),
+    ("fake_policy = rcu_dereference((&fake_state)->policy);", "fake_policy = backup_sepolicy;"),
     ("security_context_to_sid(&fake_state, buf, size, &sid, GFP_KERNEL)", TOSID % ("buf", "size", "&sid")),
     ("security_context_to_sid(&fake_state, value, size, &tmp_sid, GFP_KERNEL)", TOSID % ("value", "size", "&tmp_sid")),
     ("security_sid_to_context(&fake_state, sid, &canon, &len)", "security_sid_to_context_with_policy(backup_sepolicy, sid, &canon, &len)"),
