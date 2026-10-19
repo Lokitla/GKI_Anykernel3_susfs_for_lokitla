@@ -392,10 +392,17 @@ stage_install_deps() {
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
   sudo apt-get update \
     || { echo "::error::apt-get update 失败，编译依赖无法安装"; cd "$_pwd"; return 1; }
-  # binutils 提供 ld：BBG 的 genheaders 由 clang-12 驱动链接，缺 ld 时报
+  # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
+  #
+  # 但它**不能**消除日志里那条
   #   clang-12: error: unable to execute command: Executable "ld" doesn't exist!
-  # 该错误会被 BBG 的自愈路径盖住（随后仍打印 -- BBG was enabled!），但会在
-  # 日志里留下误导性的 error 行，且自愈失败时才会真炸，属于「来得太晚的报错」。
+  # 该行来自 BBG 在 make mrproper 阶段生成 security/selinux/flask.h 的子 make：
+  # GKI 的 build/build.sh 会把 PATH 重写为 prebuilts 目录（不含 /usr/bin），
+  # 所以 apt 装的 ld 不在其搜索路径内，日志里也可见 "binutils is already the
+  # newest version"。这条错误随后被 BBG 自愈路径盖住（先打印 "-- BBG was
+  # enabled!"，稍后内核正规流程 GEN security/selinux/flask.h，再出现
+  # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
+  # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
   sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
     || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; cd "$_pwd"; return 1; }
 
