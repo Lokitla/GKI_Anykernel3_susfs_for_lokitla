@@ -214,7 +214,12 @@ KSU_COMPAT_KVER_LT66 := $(shell awk '"'"'$$1=="VERSION" { v = $$3 } $$1=="PATCHL
 # real (non-static) symbols; BakaSU keeps them static and compiles the whole
 # block out once KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE is defined.
 KSU_COMPAT_TAKEOVER_REF := $(shell grep -Eqs "my_setprocattr|my_write_context|my_write_access" $(srctree)/security/selinux/hooks.c $(srctree)/security/selinux/selinuxfs.c 2>/dev/null && echo yes)
-KSU_COMPAT_TAKEOVER_EXPORT := $(shell grep -Eqs "^[[:space:]]*(ssize_t|int|long)[[:space:]]+my_(setprocattr|write_context|write_access)[[:space:]]*[(]" $(srctree)/*/kernel/feature/selinux_hide.c $(srctree)/common/*/kernel/feature/selinux_hide.c 2>/dev/null && echo yes)
+# 注意：GATE 是 make 语法，$(shell ...) 内部**不能出现不配对的圆括号**（make 会按括号
+# 配平来切分函数参数）。所以这里不能用 grep 的 [(] 去锚定函数调用的左括号，否则
+# make 直接报 "unterminated call to function 'shell'"，整次编译在解析阶段就失败。
+# 换个等价判据：行首类型 + 符号名（不含 static），命中即说明 KernelSU 以非 static
+# 形式声明/定义了该符号。
+KSU_COMPAT_TAKEOVER_EXPORT := $(shell grep -Eqs "^[[:space:]]*(ssize_t|int|long)[[:space:]]+my_(setprocattr|write_context|write_access)[[:space:]]*" $(srctree)/*/kernel/feature/selinux_hide.c $(srctree)/common/*/kernel/feature/selinux_hide.c 2>/dev/null && echo yes)
 
 ifeq ($(KSU_COMPAT_KVER_LT66),yes)
 ifneq ($(KSU_COMPAT_TAKEOVER_REF),)
