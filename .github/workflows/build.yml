@@ -356,9 +356,12 @@ jobs:
       id: cache-toolchain
       uses: actions/cache@v5
       with:
-        path: 'kernel-build-tools
-
-          mkbootimg'
+        # 必须是块标量（|）：原来的单引号多行标量会被 YAML 折叠成一个
+        # 含换行的单字符串，actions/cache 拿到的就不是两个路径，
+        # 这份缓存永远存不进也取不到。
+        path: |
+          kernel-build-tools
+          mkbootimg
         key: toolchain-${{ runner.os }}-v1
     - name: 上游 SUSFS 闸门健康检查（fail-fast）
       # BakaSU 上游会在 kernel/tools/susfs_compat.mk 末尾追加无条件的

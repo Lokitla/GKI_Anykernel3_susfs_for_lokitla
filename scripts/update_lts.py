@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# 仅供本地全量重建，CI 不使用：任何 workflow 都不调用本脚本（CI 走增量
+# 的 update_data.py）。上游接口变动时两边需各自维护，别把 CI 指向这里。
+
 import json
 import os
 

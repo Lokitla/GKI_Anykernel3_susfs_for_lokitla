@@ -167,6 +167,15 @@ if [ "${SUSFS_RAW_PROBE:-false}" = "true" ]; then
 
   printf '%s\n' "$_patch_log" > "$PROBE_DIR/patch.log"
 
+  # 零 .rej 时不能走 printf 拼接：空展开会得到一个空串，拼进 JSON 就是 [""]
+  # （空字符串条目而非空数组），下游按「rej_files 条数 > 0」判断就会把最理想的
+  # 零冲突情形误判成有残留。这里显式区分两种情况。
+  if [ "${#_rej_files[@]}" -eq 0 ]; then
+    _rej_json=""
+  else
+    _rej_json=$(printf '"%s",' "${_rej_files[@]}" | sed 's/,$//')
+  fi
+
   cat > "$PROBE_DIR/apply.json" <<EOF
 {
   "raw_probe": true,
@@ -174,7 +183,7 @@ if [ "${SUSFS_RAW_PROBE:-false}" = "true" ]; then
   "susfs_side_fixes_applied": "$_side_applied",
   "patch_exit": $_rc,
   "rej": $_rej_count,
-  "rej_files": [$(printf '"%s",' "${_rej_files[@]}" | sed 's/,$//')],
+  "rej_files": [$_rej_json],
   "hunks_failed": $_hunks_failed,
   "hunks_ignored": $_hunks_ignored,
   "hunks_offset": null,

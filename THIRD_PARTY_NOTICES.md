@@ -62,6 +62,7 @@ BakaSU 自上游 `48fa4bb` 起在 `kernel/tools/susfs_compat.mk` 末尾保留无
 - 上述 SPDX 行描述的是**本仓库该文件自身的许可**，不代表整个仓库或内核产物只有一种许可——内核对部分受 GPL-2.0-only 约束，上游补丁可能另有许可（见上节）。
 - `apply.sh` 的引用实现参考了 LingLuo17/AnyKernel3，但 `align.sh` 只在注释中标注**对照实现**，代码由本仓库自行编写，因此按 ② 处理。
 - 移植文件（①）在分发时需同时提供对应上游源码与许可证文本；GPL-3.0 全文见 [`LICENSE-GPL-3.0.txt`](LICENSE-GPL-3.0.txt)。
+- 表② 的 `zram/apply_lz4_neon.sh` 本身是本仓库脚本；它操作的 `zram/lz4/`（Yann Collet，BSD-2-Clause）与 `zram/lz4/lz4armv8/`（源自 Huawei EROFS 的 NEON 实现）属另一类第三方源码，逐文件头自带许可声明，详见 [`NOTICE`](NOTICE) 的同名两条。
 
 ## 许可风险组件细节
 

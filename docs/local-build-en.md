@@ -65,12 +65,14 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 | Option | Description |
 |---|---|
-| `--ksu-variant` | KernelSU variant, default `BakaSU`: `SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `Official` / `Next` |
+| `--ksu-variant` | KernelSU variant, default `BakaSU`: `SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `FinaSU` / `Official` / `Next` |
 | `--ksu-branch-mode` | SukiSU branch to pull (SukiSU only): `auto`=follow the SUSFS toggle (default), `main`=manager branch, `builtin`=in-kernel implementation |
 | `--no-susfs` | Disable SUSFS (enabled by default) |
 | `--version` | Custom version name |
 | `--build-time` | Custom build time (pins the kernel `UTS_VERSION` timestamp) |
 | `--export-susfs-patches` | Export the SUSFS integration patch |
+| `--sukisu-commit` | SukiSU commit hash; the kernel and the manager both use this commit (SukiSU variants only; blank = `sukisu=` in `config/config`, or the branch head) |
+| `--susfs-commit` | SUSFS commit hash used for the in-kernel SUSFS patching (blank = the matching branch line in `config/config`, or the branch head) |
 
 ### Feature switches
 
@@ -87,14 +89,14 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 | `--nomount` | Enable the NoMount mount meta-module; the matching NoMount module must be flashed separately |
 | `--op8e` | Enable OnePlus 8E support (do not enable on other devices) |
 | `--cve-patch` | Apply the CVE-2026-43499 (GhostLock) fix chain |
-| `--droidspaces` | Droidspaces container support (`disabled` / `678` / `123` / `345`), experimental |
+| `--droidspaces` | Droidspaces container support (`不启用` [disabled] / `678` / `123` / `345`), experimental |
 | `--ntsync` | Enable NTSync (requires Droidspaces) |
 
 ### Artifacts and debugging
 
 | Option | Description |
 |---|---|
-| `--artifact-mode` | `upload all` (default) / `AnyKernel3 only` |
+| `--artifact-mode` | `上传全部` [upload all] (default) / `仅 AnyKernel3` [AnyKernel3 only] |
 | `--only <phase>` | Run a single phase (debugging) |
 | `--from <phase>` | Resume from a phase |
 | `--list-phases` | List all build phases |

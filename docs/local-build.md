@@ -64,12 +64,14 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 | 选项 | 说明 |
 |---|---|
-| `--ksu-variant` | KernelSU 变体，默认 `BakaSU`：`SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `Official` / `Next` |
+| `--ksu-variant` | KernelSU 变体，默认 `BakaSU`：`SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `FinaSU` / `Official` / `Next` |
 | `--ksu-branch-mode` | SukiSU 拉取分支（仅 SukiSU 生效）：`auto`=跟随 SUSFS 开关自动选（默认）、`main`=纯管理器分支、`builtin`=内核内置实现 |
 | `--no-susfs` | 不集成 SUSFS（默认集成） |
 | `--version` | 自定义版本名 |
 | `--build-time` | 自定义构建时间（固定内核 `UTS_VERSION` 时间戳） |
 | `--export-susfs-patches` | 导出 SUSFS 集成补丁 |
+| `--sukisu-commit` | SukiSU 提交 hash：内核与管理器统一使用该 commit（仅 SukiSU 变体生效；留空则用 `config/config` 的 `sukisu=` 或分支最新） |
+| `--susfs-commit` | SUSFS 提交 hash：内核 SUSFS 修补使用该 commit（留空则用 `config/config` 的对应分支行或分支最新） |
 
 ### 功能开关
 

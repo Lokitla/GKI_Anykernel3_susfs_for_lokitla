@@ -244,6 +244,12 @@ def main():
     if args.list_configs:
         list_configs(configs)
         return 0
+
+    # scripts/build_kernel.sh 是 bash 脚本，非 POSIX 平台无法执行；
+    # 直接 subprocess.run 会抛 OSError traceback，这里提前给出可读提示。
+    if os.name != "posix":
+        sys.exit("错误: 本地构建需要 Linux/WSL 环境；详见 docs/local-build.md")
+
     if args.list_phases:
         subprocess.run([str(SCRIPT), "--list"])
         return 0

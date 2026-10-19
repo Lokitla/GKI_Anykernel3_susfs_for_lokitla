@@ -33,7 +33,7 @@ Before flashing a third-party kernel, confirm that it matches your device and ke
 | Feature details | [docs/advanced-features-en.md](docs/advanced-features-en.md) |
 | Device and kernel lookup | [Project pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/) |
 | Beginner guide | [GitHub Pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/guide.html) |
-| Sources and licensing | [NOTICE](NOTICE) · [LICENSE](LICENSE) · [FUSION.md](FUSION.md) |
+| Sources and licensing | [NOTICE](NOTICE) · [LICENSE](LICENSE) · [FUSION.md](FUSION.md) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
 ## Build options
 

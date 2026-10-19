@@ -33,7 +33,7 @@
 | 功能说明 | [docs/advanced-features.md](docs/advanced-features.md) |
 | 设备与内核版本查询 | [项目页面](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/) |
 | 新手指南 | [GitHub Pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/guide.html) |
-| 来源与许可 | [NOTICE](NOTICE) · [LICENSE](LICENSE) · [FUSION.md](FUSION.md) |
+| 来源与许可 | [NOTICE](NOTICE) · [LICENSE](LICENSE) · [FUSION.md](FUSION.md) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
 ## 构建方式
 
@@ -93,7 +93,7 @@
 补充说明：
 
 - **SUSFS 补丁源**：BakaSU / SukiSU 默认从 [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) 的 `gki-<android>-<kernel>` 分支克隆；SukiSU 会优先尝试 ShirkNeko 的 fork，分支不存在时回落到原版。
-  主流变体跟随分支头、不钉提交；但**旧版变体（`SukiSU(40726)` / `SukiSU(40548)`）是例外**：它们按各自 `config/legacy_*` 里记录的固定提交检出，既不试 ShirkNeko 也不跟分支头——旧变体本就依赖特定提交才能编过。
+  主流变体跟随分支头、不钉提交；但**旧版变体（`SukiSU(40726)` / `SukiSU(40548)`）是例外**：它们按各自 `config/SukiSU(40548).config` / `config/SukiSU(40726).config` 里记录的固定提交检出，既不试 ShirkNeko 也不跟分支头——旧变体本就依赖特定提交才能编过。
   需要在新变体上复现历史构建时，可在入口的「提交 hash」第 2 段填 SUSFS 提交（Actions 界面没有单独的 `susfs_commit` 输入框）。
 - **BakaSU 的挂起不是本仓库造成的**：上游自 `48fa4bb` 起主动停用 SUSFS 构建，等待 simonpunk 同步新的 `selinux_hide` 模型。本仓库不无条件放行，而是核对补丁落地后的真实形态（< 6.6 看 `hooks.c` 的手动钩子与 `should_check_current`，≥ 6.6 看 `selinuxfs.c` 的 `_with_policy` 模型；也可能命中 `backup_sepolicy` 新形态），判定不通过就明确失败，避免产出上游刻意规避的可检测内核。
 - **BakaSU / FinaSU 的 SELinux 模型与旧式 SUSFS 不同**：BakaSU（`d7260ca1` 起）与 FinaSU 上游都已移除 `fake_state`，改用 `backup_sepolicy` + `security_*_with_policy`；而 SUSFS 主补丁仍按旧模型 `extern` 引用 `fake_state`，直接编译会在 ThinLTO 链接期报 `undefined symbol: fake_state`。本仓库在补丁落地后自动改写这些引用（**对 BakaSU 与 FinaSU 都生效**，判据是 `selinux_hide.c` 里已无 `fake_state`）（[`scripts/susfs_fixes/apply.sh`](scripts/susfs_fixes/apply.sh) 的 `adapt_finasu_selinux_hide_model`）；改写不成功（待替换串不是恰好命中一次、或仍有残留）一律中止构建。

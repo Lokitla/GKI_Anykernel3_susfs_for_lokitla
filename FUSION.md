@@ -47,7 +47,7 @@ GitHub Actions 上。ShirkNeko 的 Python 版能本地跑，但功能比 zzh2018
 **直接搬运任何一边都是错的**，因此采用第三条路：
 
 ```
-scripts/build_kernel.sh        ← 单一真相源（完整功能，47 个阶段）
+scripts/build_kernel.sh        ← 单一真相源（完整功能，53 个阶段）
         ├─ .github/workflows/build.yml 调用它 → Actions 构建
         └─ build.py 调用它                   → 本地构建
 ```
@@ -58,8 +58,8 @@ scripts/build_kernel.sh        ← 单一真相源（完整功能，47 个阶段
 
 | | 融合前 | 融合后 |
 |---|---|---|
-| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（2019 行 shell） |
-| `build.yml` 职责 | 全部 | 仅 Actions 编排：缓存、上传、通知（13 步） |
+| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（4533 行 shell） |
+| `build.yml` 职责 | 全部 | 仅 Actions 编排：缓存、上传、通知（21 步） |
 | 本地构建 | 不支持 | `python3 build.py ...` |
 | 逻辑份数 | 1（但绑死在 Actions） | 1（两个入口共用） |
 
@@ -141,7 +141,7 @@ run_cleanup_disk() {
 |---|---|
 | `build_kernel.sh` shell 语法（`bash -n`） | 通过 |
 | `build.py` / `telegram_notify.py` 语法 | 通过 |
-| 全部 12 个 workflow 的 YAML 解析 | 通过 |
+| 全部 15 个 workflow 的 YAML 解析 | 通过 |
 | 环境变量传递端到端（模拟 Actions 注入） | 通过 |
 | 调用链参数匹配（`main.yml` → `build.yml`） | 全部匹配 |
 | GitHub 表达式残留检查（`${{ }}` / `$GITHUB_ENV`） | 无残留 |
@@ -154,7 +154,7 @@ run_cleanup_disk() {
 
 因此以下方面是**静态推导等价**，尚未经过真实构建验证：
 
-- 47 个阶段在独立 shell 进程中串接后，个别依赖子 shell 行为的语句
+- 53 个阶段在独立 shell 进程中串接后，个别依赖子 shell 行为的语句
 - `compile_kernel` 的重试包装（原为 `nick-fields/retry@v4` action）
 - 各补丁步骤在真实源码上的实际效果
 
@@ -189,16 +189,21 @@ shell 逻辑的，日常维护不需要再运行它。
   比上游 zzh20188 的 328 行更完整）；
 - NoMount 挂载元模块、网络增强等（与上游 zzh20188 同代，非 LingLuo 独有）。
 
-### 确定遗漏（合并上游移植分支时漏掉）
+### 已解决
 
 1. **6.12 的 ZRAM 补丁资源**：上游 `SukiSU_patch` 的 `other/zram/zram_patch/` 只有
    `5.10 / 5.15 / 6.1 / 6.6` 四个目录，没有 6.12。LingLuo 为此补了 6.12 补丁
-   （commit `94fd545`、`ba3c27c`），本仓库未引入。
-   → 后果：6.12 入口的 `use_zram` 默认 `true` 却恒不生效（已改为默认 `false` 并在
-   描述里注明，属于"让开关说真话"的止血，不是恢复功能）。
-2. **6.12 的 KPM**：脚本在内核 ≥ 6.10 时强制 `KPM_SUPPORTED=0`，与 LingLuo 无关，
+   （commit `94fd545`、`ba3c27c`）。
+   → **已解决**：本仓库 `zram_patch/6.12/` 已包含 `lz4kd.patch` 与 `lz4k_oplus.patch`，
+   `scripts/build_kernel.sh:2779-2793` 的 `zram_patch_file()` 优先取用本仓库版本（优先于上游
+   `SukiSU_patch`），`:2796` 的 `zram_lz4k_available()` 在校验齐全后才放行。
+   6.12 入口的 `use_zram` 仍默认 `false`（默认关闭），需要时可显式启用。
+
+### 确定遗漏（合并上游移植分支时漏掉）
+
+1. **6.12 的 KPM**：脚本在内核 ≥ 6.10 时强制 `KPM_SUPPORTED=0`，与 LingLuo 无关，
    属上游限制。6.12 入口的 `use_kpm` 默认已改为 `disabled (关闭)`。
-3. **UAPI 同步**：已移植（beta 分支），但实现方式与上游不同 —— 不用上游那个会腐烂的静态
+2. **UAPI 同步**：已移植（beta 分支），但实现方式与上游不同 —— 不用上游那个会腐烂的静态
    `builtin-uapi4.patch`，改为 `scripts/ksu_uapi_sync/align.sh` 在构建时读内核侧
    `KERNEL_SU_UAPI_VERSION`，与上游 `main` 的实际取值动态对齐（并补 `KSU_GET_INFO_FLAG_BUNDLED`），
    由 `build_kernel.sh` 的 `sync_ksu_uapi` 阶段在编译前调用。

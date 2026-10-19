@@ -5,6 +5,14 @@ name: Emergency Release Cleanup
 permissions:
   contents: write
 
+# 并发控制：Critical 分支是「先 gh release delete 再 gh release create」的
+# 非原子序列。同一 tag 并发两次 run（连点两次 / 两人同时处理）时，
+# B 的 delete 可能落在 A 的 create 之后，导致 Release 消失或说明被覆盖。
+# 所以按目标 tag 串行化，且绝不取消进行中的运行（取消会停在删掉之后）。
+concurrency:
+  group: emergency-cleanup-${{ inputs.target_tag }}
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +25,7 @@ on:
           - Normal
           - Bug
           - Critical
+        default: Normal
 
       # ==================== 文本输入 ====================
       target_tag:

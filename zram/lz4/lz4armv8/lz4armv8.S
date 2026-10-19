@@ -1,6 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * lz4armv8.S
  * LZ4 decompression optimization based on arm64 NEON instruction
+ *
+ * Copyright (C) Huawei Technologies Co., Ltd.
+ * Origin: the Huawei EROFS in-kernel LZ4 NEON decompression routine;
+ * source and licensing are recorded in NOTICE ("zram/lz4/lz4armv8" entry).
  */
 
 #include <linux/linkage.h>

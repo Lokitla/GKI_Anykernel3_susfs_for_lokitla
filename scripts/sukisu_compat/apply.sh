@@ -20,7 +20,9 @@ set -eo pipefail
 KSU_DIR="${1:-KernelSU}"
 
 fail() {
-  if [ "$SKIP_INCOMPATIBLE" = "true" ]; then
+  # 默认值兜底：脚本目前是 set -eo pipefail（无 -u），但调用方不保证注入该变量；
+  # 一旦有人补上 -u，fail() 就会在最需要报错的路径上 unbound variable 崩溃。
+  if [ "${SKIP_INCOMPATIBLE:-false}" = "true" ]; then
     echo "::warning title=SukiSU 兼容补丁已跳过::$1"
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       echo "" >> "$GITHUB_STEP_SUMMARY"

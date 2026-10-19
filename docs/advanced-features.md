@@ -1,8 +1,8 @@
 # 🧩 进阶功能
 
-> 本页聚合本仓库的六项进阶用法：GhostLock 安全修复、Re-Kernel、NoMount 挂载元模块、
+> 本页聚合本仓库的七项进阶用法：GhostLock 安全修复、Re-Kernel、网络增强、NoMount 挂载元模块、
 > Droidspaces 容器支持、自定义提交配置、伪装 `/proc/config.gz`。
-> 它们默认均不启用 —— 这与主文档 [README.md](../README.md) 中的「🧩 进阶功能」一节对应。
+> 它们默认均不启用 —— 详见主文档 [README.md](../README.md) 的「快速入口」表与 `docs/` 目录。
 >
 > 本地 CLI 的用法见 [💻 本地构建文档](local-build.md)，云端 Actions 的参数名在下表「Actions 开关」一列。
 
@@ -57,6 +57,7 @@ GhostLock 是影响 Linux 内核的一组高风险漏洞，包括 `CVE-2026-4349
 - `obj-m := rekernel.o` 被改写为 `obj-$(CONFIG_REKERNEL) += rekernel.o`
 - `depends on MODULES` 被移除（内置编译不需要模块支持）
 - 通过 `source "drivers/rekernel/Kconfig"` 挂进驱动树
+- defconfig 追加 `CONFIG_REKERNEL=y` 与 `CONFIG_REKERNEL_NETWORK=y`
 
 ---
 
@@ -85,7 +86,6 @@ bazel 会直接构建失败。所以本阶段写入时会把已存在的 `=m` �
 
 > 用户态需自行准备 `ipset` 工具：内核只提供能力，不附带用户态程序。
 > IPSet 的 `CONFIG_IP_SET_MAX=65534` 落在内核 Kconfig 的 range（2–65534）内，无需改源码。
-- defconfig 追加 `CONFIG_REKERNEL=y` 与 `CONFIG_REKERNEL_NETWORK=y`
 
 > **为什么要内置：** Re-Kernel 依赖 `kallsyms_lookup_name` 等内核内部符号，
 > 而 GKI 对**外部模块**隐藏这些符号。走 in-tree 内置编译可以看到它们，

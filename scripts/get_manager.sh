@@ -6,6 +6,25 @@
 #       GitHub Actions 对 `${{ }}` 表达式长度的限制（见上游 commit 0b25bd1
 #       「keep manager workflow expressions within limit」）。逻辑本身由本仓库维护，
 #       不来自第三方；管理器 APK 的来源见 NOTICE 中的对应变体条目。
+set -euo pipefail
+
+# 本脚本由 CI 直接执行，失败必须让 step 变红，不能带着半个 manager-artifacts 继续；
+# 因此这里打开严格模式。为兼容 set -u，先把工作流传入的变量全部显式初始化。
+: "${KSU_VARIANT:=}"
+: "${KSU_VERSION:=}"
+: "${MANAGER_SPOOFED:=}"
+: "${SUKISU_COMMIT:=}"
+: "${FINASU_RELEASE_COMMIT:=}"
+: "${GH_TOKEN:=}"
+: "${GITHUB_ENV:=}"
+: "${GITHUB_OUTPUT:=}"
+: "${GITHUB_WORKSPACE:=}"
+: "${LEGACY_RELEASE_TAG:=}"
+: "${LEGACY_DIR:=}"
+: "${MANAGER_URL:=}"
+: "${REPO:=}"
+: "${KSUM:=}"
+
 case "$KSU_VARIANT" in
   "SukiSU(40726)") LEGACY_RELEASE_TAG="v2.1.0-r2"; LEGACY_DIR="SukiSU_40726" ;;
   "SukiSU(40548)") LEGACY_RELEASE_TAG="v2.0.0-r34"; LEGACY_DIR="SukiSU_40548" ;;
@@ -21,7 +40,12 @@ if [ -n "$LEGACY_RELEASE_TAG" ]; then
     echo "未找到 $KSU_VARIANT 管理器下载地址。"
     exit 1
   fi
-  curl -fL -o "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" "$MANAGER_URL"
+  curl -fL -o "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" "$MANAGER_URL" || {
+    echo "::error::下载 $KSU_VARIANT 管理器失败：$MANAGER_URL"; exit 1;
+  }
+  [ -s "manager-artifacts/$LEGACY_DIR/${LEGACY_DIR}-release.apk" ] || {
+    echo "::error::$KSU_VARIANT 管理器下载后为空文件"; exit 1;
+  }
   exit 0
 fi
 
@@ -45,7 +69,9 @@ if [ "$KSU_VARIANT" = "FinaSU" ]; then
   mkdir -p manager-artifacts
   REL_APK="manager-artifacts/$(basename "$REL_APK_URL")"
   curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
-    -o "$REL_APK" "$REL_APK_URL"
+    -o "$REL_APK" "$REL_APK_URL" || {
+    echo "::error::下载 FinaSU 管理器失败：$REL_APK_URL"; exit 1;
+  }
   unzip -tq "$REL_APK" >/dev/null 2>&1 || {
     echo "::error::FinaSU 下载文件不是有效 APK/ZIP"; exit 1;
   }
@@ -115,9 +141,11 @@ calculate_run_ksu_version() {
   # rev-list 的结果取决于本地抓取深度，同一个 commit 两次运行能数出不同值
   # —— 于是同一份脚本，一次严格命中 40922，一次退到 40879，稳定性为零。
   # API 口径既稳定又与内核侧对齐；本地 git 仅作 API 拿不到时的兜底。
+  # 没有 Link 头（单页结果）是正常情况，必须回退到本地 git 计数而不是
+  # 被 set -e / pipefail 当成失败中断；末尾 `|| true` 保持原语义。
   git_version=$(curl -sI -H "Authorization: token $GH_TOKEN" \
       "https://api.github.com/repos/$REPO/commits?sha=$head_sha&per_page=1" 2>/dev/null |
-      grep -i "^link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p')
+      grep -i "^link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') || true
 
   if [ -z "$git_version" ]; then
     if ! git -C KernelSU cat-file -e "$head_sha^{commit}" 2>/dev/null; then
@@ -410,7 +438,13 @@ while IFS= read -r LINE; do
   APK_PATH="$CANDIDATE_DIR/$NAME"
   
   echo "下载候选 $FETCHED: $NAME"
-  curl -L -H "Authorization: token $GH_TOKEN" -o "$APK_PATH" "$URL"
+  # 单个候选下载失败是「跳过该候选」的既定路径（原实现靠后面 unzip 失败兜底），
+  # 这里显式跳过，避免 set -e 把一次网络抖动升级成整步失败。
+  if ! curl -L -H "Authorization: token $GH_TOKEN" -o "$APK_PATH" "$URL"; then
+    echo "⚠️  下载失败，跳过：$NAME"
+    rm -rf "$CANDIDATE_DIR"
+    continue
+  fi
   
   # artifact 是 zip 压缩包，真实版本号在包内 APK 文件名上：
   # 先解压再找 APK，不能拿 artifact 名（如 Spoofed-Manager-release）提取版本
@@ -428,7 +462,8 @@ while IFS= read -r LINE; do
   fi
   
   # 从 APK 文件名提取实际版本
-  ACTUAL_VERSION=$(extract_apk_version "$(basename "$APK_FILE")")
+  # 提取不到版本号是「跳过该候选」的正常路径，别让 set -e 直接终止脚本。
+  ACTUAL_VERSION=$(extract_apk_version "$(basename "$APK_FILE")") || true
   
   if ! [[ "$ACTUAL_VERSION" =~ ^[0-9]+$ ]]; then
     echo "⚠️  无法提取版本，跳过：$NAME"
@@ -481,7 +516,13 @@ if [ -n "$BEST_DIR" ]; then
     # 分流步骤依赖这个子目录名区分 spoofed/普通）
     [ -f "$f" ] || continue
     SAFE_NAME=$(basename "$f" | tr '/ ' '__')
-    unzip -o "$f" -d "manager-artifacts/$SAFE_NAME"
+    unzip -o "$f" -d "manager-artifacts/$SAFE_NAME" || {
+      echo "::error::解压管理器产物失败：$f"; exit 1;
+    }
+    # 解压成功不等于有产物：空目录会让后续「分流/上传」步骤安静地拿到 0 个 APK。
+    if [ -z "$(find "manager-artifacts/$SAFE_NAME" -type f -print -quit)" ]; then
+      echo "::error::解压后目录为空：manager-artifacts/$SAFE_NAME（$f）"; exit 1;
+    fi
   done
   
   if [ "$MATCHED" -eq 1 ]; then

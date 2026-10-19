@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 # 本仓库自有的发布辅助脚本（非构建链路）。
-#!/usr/bin/env python3
 """用 Contents API 把单个文件从本地提交推到远端分支（绕开 git push）。
 
 本环境的 `git push` 会被沙箱 SIGTERM 硬拦（含官方 github.com 直连），
@@ -17,14 +17,21 @@ import base64
 import json
 import subprocess
 import sys
-import time
 import urllib.request
 
 OWNER, REPO = "Lokitla", "GKI_SUKISU_SUSFS_for_Lokita"
+
+if len(sys.argv) < 4:
+    print("用法: python tools/push_contents.py <branch> <path> <local_commit> [message]",
+          file=sys.stderr)
+    sys.exit(1)
+
 branch, path, commit = sys.argv[1], sys.argv[2], sys.argv[3]
 message = sys.argv[4] if len(sys.argv) > 4 else f"chore: 同步 {commit[:10]} 到 {branch}"
 
-token = subprocess.run(["gh", "auth", "token"], capture_output=True).stdout.decode().strip()
+# check=True：gh 未登录/未安装时必须立刻失败，否则 token 为空串，
+# 一路走到 urllib 才拿到 401，错误现场已经离根因很远了。
+token = subprocess.run(["gh", "auth", "token"], capture_output=True, check=True).stdout.decode().strip()
 
 
 def api(method, url, data=None):
@@ -57,4 +64,3 @@ api(
     },
 )
 print(f"已推送 {branch}:{path}")
-time.sleep(1)

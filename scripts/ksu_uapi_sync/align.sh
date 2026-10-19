@@ -81,7 +81,13 @@ if [ -z "$KSU_UAPI_URL" ]; then
 fi
 UPSTREAM_UAPI_URL="$KSU_UAPI_URL"
 
+# awk 改写用的临时文件路径（为空表示当前没有待清理的临时文件）。
+# die 是硬失败出口，任何一条 die 都必须先把临时文件删掉：否则 mv 失败（只读挂载、
+# 跨设备）后内核树里会残留 *.uapi_tmp，git status 变脏，还可能被
+# collect_conflicts 阶段当成补丁冲突文件收走。
+UAPI_TMP=""
 die() {
+  [ -n "${UAPI_TMP}" ] && rm -f "${UAPI_TMP}"
   echo "::error::SukiSU UAPI 对齐：$*"
   exit 1
 }
@@ -197,10 +203,12 @@ else
 fi
 
 if [ -n "$NEW_LINE" ]; then
+  UAPI_TMP="${UAPI_FILE}.uapi_tmp"
   awk -v n="$ANCHOR" -v line="$NEW_LINE" \
     'NR == n { print; print line; next } { print }' \
-    "$UAPI_FILE" > "${UAPI_FILE}.uapi_tmp" || die "写入临时文件失败"
-  mv "${UAPI_FILE}.uapi_tmp" "$UAPI_FILE" || die "替换 $UAPI_FILE 失败"
+    "$UAPI_FILE" > "$UAPI_TMP" || die "写入临时文件失败"
+  mv "$UAPI_TMP" "$UAPI_FILE" || die "替换 $UAPI_FILE 失败"
+  UAPI_TMP=""
 
   grep -q 'KSU_GET_INFO_FLAG_BUNDLED' "$UAPI_FILE" \
     || die "插入后仍未匹配到 KSU_GET_INFO_FLAG_BUNDLED"

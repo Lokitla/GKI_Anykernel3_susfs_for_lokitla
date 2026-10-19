@@ -272,7 +272,10 @@ jobs:
   build-kernels-a13-5-15:
     needs: [prepare-matrix, get-ksu-manager]
     # 管理器拉取失败/被跳过时不阻塞内核构建（ksuCommit 为空则内核跟随 main HEAD）
-    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' }}
+    # 空矩阵时也必须跳过：matrix.include=[] 会起 0 个作业、job 结果为 skipped，
+    # 若照跑，main.yml 的发布校验会因为「skipped」误判为通过而产出空 Release。
+    # 与 kernel-a16-6-12.yml 的条件保持一致（两个条件必须写在同一条 if 里）。
+    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' && needs.prepare-matrix.outputs.count != '0' }}
     name: "5.15.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
     strategy:
       fail-fast: false

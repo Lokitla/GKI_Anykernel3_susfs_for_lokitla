@@ -46,8 +46,11 @@ Thumbs.db
 # Local scratch/temp dirs (排查用，不进版本库)
 .tmp_probe/
 .tmp_merge/
+# 编辑器/工具（DSH 文件写入）留下的原子替换锁文件
+.dsh-ops-update-*.lock
 
 # Agent 交接记录（本地文件，不提交）
 agent.md
 agentnext.md
 PUSH_RESULT.txt
+review.md
