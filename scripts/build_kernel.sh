@@ -392,8 +392,12 @@ stage_install_deps() {
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
   sudo apt-get update \
     || { echo "::error::apt-get update 失败，编译依赖无法安装"; cd "$_pwd"; return 1; }
-  sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4 \
-    || { echo "::error::安装编译依赖失败（ccache/python3/git/bison/flex/lz4 等）"; cd "$_pwd"; return 1; }
+  # binutils 提供 ld：BBG 的 genheaders 由 clang-12 驱动链接，缺 ld 时报
+  #   clang-12: error: unable to execute command: Executable "ld" doesn't exist!
+  # 该错误会被 BBG 的自愈路径盖住（随后仍打印 -- BBG was enabled!），但会在
+  # 日志里留下误导性的 error 行，且自愈失败时才会真炸，属于「来得太晚的报错」。
+  sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
+    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; cd "$_pwd"; return 1; }
 
   cd "$_pwd"
 }
