@@ -52,13 +52,13 @@ set -eo pipefail
 #                            自身的两处编译缺陷）
 #   SUSFS_PIN_TIME        -> ISO 8601 时刻，把 susfs4ksu 固定到该时刻之前最后一次
 #                            提交，让同一轮探测的所有任务用同一份上游代码。
-#                            这一项已完整实现（见 clone_deps 阶段）。
+#                            这一项已完整实现（见 clone_susfs 阶段，stage_clone_susfs）。
 : "${SUSFS_RAW_PROBE:=false}"
 : "${SUSFS_SIDE_FIXES:=false}"
 : "${SUSFS_PIN_TIME:=}"
 
 # SUSFS 开关清单——与 SukiSU builtin 分支 kernel/Kconfig 里的 KSU_SUSFS* 一一对应
-# （builtin 的 Kconfig 共 11 项：KSU_SUSFS 总开关 + 下面 9 个子项；main 分支 0 项）。
+# （builtin 的 Kconfig 共 10 项：KSU_SUSFS 总开关 + 下面 9 个子项；main 分支 0 项）。
 # 单一真相源：写 defconfig 和编译前核对 Kconfig 都从这里取，避免两处各写一份而漂移。
 SUSFS_CONFIG_OPTIONS=(
   CONFIG_KSU_SUSFS=y
@@ -213,7 +213,6 @@ log_stage() {
 # ---------------------------- 阶段函数 ----------------------------
 stage_summary() {
   log_stage "summary" "构建信息摘要"
-  local _pwd="$PWD"
   echo "========================================"
   echo "       内核构建配置摘要"
   echo "========================================"
@@ -245,18 +244,15 @@ stage_summary() {
   fi
   echo "========================================"
 
-
   # BBR 开关展示（zzh20188 原摘要没有该项）
   echo "BBR 拥塞控制: ${USE_BBR}"
 
-  cd "$_pwd"
 }
 
 run_summary() { stage_summary "$@"; }
 
 stage_cleanup_disk() {
   log_stage "cleanup_disk" "清理磁盘空间"
-  local _pwd="$PWD"
   # 先并行 mv 到临时目录（瞬时完成），再在后台低优先级删除，不阻塞后续步骤
   # 临时目录必须放在工作区之外：checkout 会以 runner 用户清空工作区，
   # 遇到 sudo mv 进来的 root 属主文件会 EACCES 失败
@@ -305,7 +301,6 @@ stage_cleanup_disk() {
   ) >/dev/null 2>&1 &
   disown
 
-  cd "$_pwd"
 }
 
 # 安全门：仅 GitHub Actions runner 执行，本地构建跳过以免破坏系统
@@ -319,7 +314,6 @@ run_cleanup_disk() {
 
 stage_init_env() {
   log_stage "init_env" "初始化构建环境"
-  local _pwd="$PWD"
   CONFIG="${ANDROID_VERSION}-${KERNEL_VERSION}-${SUB_LEVEL}"
   KERNEL_ROOT="$WORKSPACE/$CONFIG"
   mkdir -p "$KERNEL_ROOT"
@@ -356,19 +350,17 @@ stage_init_env() {
   curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 \
     https://storage.googleapis.com/git-repo-downloads/repo \
     -o "$WORKSPACE/git-repo/repo" \
-    || { echo "::error::下载 repo 工具失败"; cd "$_pwd"; return 1; }
+    || { echo "::error::下载 repo 工具失败"; return 1; }
   chmod 0755 "$WORKSPACE/git-repo/repo"
   export PATH="$WORKSPACE/git-repo:$PATH"
   export REPO="$WORKSPACE/git-repo/repo"
 
-  cd "$_pwd"
 }
 
 run_init_env() { stage_init_env "$@"; }
 
 stage_show_config() {
   log_stage "show_config" "显示配置信息"
-  local _pwd="$PWD"
   CONFIG_FILE="$WORKSPACE/config/config"
   if [ -f "$CONFIG_FILE" ]; then
     echo "加载配置文件: $CONFIG_FILE"
@@ -379,19 +371,17 @@ stage_show_config() {
     cat "$LEGACY_SUKISU_CONFIG"
   fi
 
-  cd "$_pwd"
 }
 
 run_show_config() { stage_show_config "$@"; }
 
 stage_install_deps() {
   log_stage "install_deps" "安装编译依赖"
-  local _pwd="$PWD"
   # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
   # 错误要等到编译期才以「找不到 bison / flex」的形式暴露，排查成本极高。
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
   sudo apt-get update \
-    || { echo "::error::apt-get update 失败，编译依赖无法安装"; cd "$_pwd"; return 1; }
+    || { echo "::error::apt-get update 失败，编译依赖无法安装"; return 1; }
   # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
   #
   # 但它**不能**消除日志里那条
@@ -404,16 +394,14 @@ stage_install_deps() {
   # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
   # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
   sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
-    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; cd "$_pwd"; return 1; }
+    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; return 1; }
 
-  cd "$_pwd"
 }
 
 run_install_deps() { stage_install_deps "$@"; }
 
 stage_setup_ccache() {
   log_stage "setup_ccache" "配置 ccache"
-  local _pwd="$PWD"
   # ccache 只是加速手段，配置失败不应中断构建（缺 ccache 时编译照样能完成）。
   # 但在 `if ! run_xxx` 上下文里 errexit 被抑制，这些失败原本连日志都没有，故显式告警。
   mkdir -p ~/.cache/bazel \
@@ -425,26 +413,23 @@ stage_setup_ccache() {
     || echo "::warning::ccache 压缩配置失败（不影响构建）"
   export CCACHE_DIR="$HOME/.ccache"
 
-  cd "$_pwd"
 }
 
 run_setup_ccache() { stage_setup_ccache "$@"; }
 
 stage_download_toolchain() {
   log_stage "download_toolchain" "下载工具链"
-  local _pwd="$PWD"
   AOSP_MIRROR=https://android.googlesource.com
   BRANCH=main-kernel-build-2024
   # 工具链来自 android.googlesource.com，与 GitHub/GitLab 分属不同基建，但同样是
   # 下游一切编译的前提：这里失败，后面每一步都无可挽回。同样走退避重试。
   clone_with_retry $AOSP_MIRROR/kernel/prebuilts/build-tools kernel-build-tools -b $BRANCH --depth 1 || {
-    echo "::error::AOSP 工具链 build-tools 克隆失败（分支 $BRANCH）"; cd "$_pwd"; return 1
+    echo "::error::AOSP 工具链 build-tools 克隆失败（分支 $BRANCH）"; return 1
   }
   clone_with_retry $AOSP_MIRROR/platform/system/tools/mkbootimg mkbootimg -b $BRANCH --depth 1 || {
-    echo "::error::AOSP mkbootimg 克隆失败（分支 $BRANCH）"; cd "$_pwd"; return 1
+    echo "::error::AOSP mkbootimg 克隆失败（分支 $BRANCH）"; return 1
   }
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -458,7 +443,6 @@ run_download_toolchain() {
 
 stage_gen_sign_key() {
   log_stage "gen_sign_key" "生成签名密钥"
-  local _pwd="$PWD"
   # 复用已有密钥以保证 boot 签名可复现，仅在缺失时生成；公钥归档便于审计
   #
   # 注意（可复现性）：该 pem 位于 kernel-build-tools/ 内，会随「缓存工具链」
@@ -487,14 +471,12 @@ stage_gen_sign_key() {
       >> "$WORKSPACE/build-logs/build-info.txt"
   fi
 
-  cd "$_pwd"
 }
 
 run_gen_sign_key() { stage_gen_sign_key "$@"; }
 
 stage_setup_git() {
   log_stage "setup_git" "配置 Git"
-  local _pwd="$PWD"
   git config --global user.name "BuildBot"
   git config --global user.email "BuildGkiKernel@gmail.com"
   # 上游 git 服务偶发连接停滞：传输速率低于 1KB/s 持续 180 秒即中止，
@@ -502,7 +484,6 @@ stage_setup_git() {
   git config --global http.lowSpeedLimit 1000
   git config --global http.lowSpeedTime 180
 
-  cd "$_pwd"
 }
 
 run_setup_git() { stage_setup_git "$@"; }
@@ -545,7 +526,6 @@ clone_with_retry() {
 
 stage_clone_deps() {
   log_stage "clone_deps" "克隆依赖仓库"
-  local _pwd="$PWD"
   ANYKERNEL_BRANCH="gki-2.0"
 
   # 只取工作树所需文件，全部浅克隆：这些仓库每次构建都会被 80+ 个任务各拉一遍，
@@ -558,26 +538,25 @@ stage_clone_deps() {
   echo "克隆 AnyKernel3..."
   clone_with_retry https://github.com/WildKernels/AnyKernel3.git AnyKernel3 -b "$ANYKERNEL_BRANCH" || {
     echo "::error::AnyKernel3 克隆失败（分支 $ANYKERNEL_BRANCH）"
-    cd "$_pwd"; return 1
+    return 1
   }
   rm -rf AnyKernel3/.git
 
   # 注意：阶段函数是在 `if ! "run_${p}"` 里被调用的，bash 会因此在函数体内部
   # 关闭 `set -e`，所以这里的每一步都必须自己判失败并 return 1；否则克隆失败后
-  # 函数会带着最后的 `cd "$_pwd"`（返回 0）"成功"退出，一路编到一个缺依赖的内核。
+  # 函数会带着最后一条命令的退出码「成功」退出，一路编到一个缺依赖的内核。
   echo "准备补丁资源..."
   clone_with_retry https://github.com/WildKernels/kernel_patches.git kernel_patches || {
-    echo "::error::kernel_patches 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::kernel_patches 克隆失败"; return 1
   }
   clone_with_retry https://github.com/SukiSU-Ultra/SukiSU_patch.git SukiSU_patch || {
-    echo "::error::SukiSU_patch 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::SukiSU_patch 克隆失败"; return 1
   }
   echo "使用当前仓库补丁目录: $ZZH_PATCHES"
   clone_with_retry https://github.com/Numbersf/Action-Build.git Action-Build --depth=1 || {
-    echo "::error::Action-Build 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::Action-Build 克隆失败"; return 1
   }
 
-  cd "$_pwd"
 }
 
 run_clone_deps() { stage_clone_deps "$@"; }
@@ -592,7 +571,6 @@ run_clone_deps() { stage_clone_deps "$@"; }
 # **不钉上游 commit**：分支永远取 gki-<android>-<kernel>，跟随上游更新。
 stage_clone_susfs() {
   log_stage "clone_susfs" "克隆 SUSFS 补丁源"
-  local _pwd="$PWD"
   SUSFS_BRANCH="gki-${ANDROID_VERSION}-${KERNEL_VERSION}"
 
   echo "克隆 SUSFS (分支: $SUSFS_BRANCH)..."
@@ -612,16 +590,16 @@ stage_clone_susfs() {
 
   if [ -n "$LEGACY_SUKISU_CONFIG" ]; then
     clone_with_retry https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   elif [ "${KSU_VARIANT}" == "SukiSU" ] && remote_has_branch https://github.com/ShirkNeko/susfs4ksu.git "$SUSFS_BRANCH"; then
     clone_with_retry https://github.com/ShirkNeko/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::ShirkNeko/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::ShirkNeko/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   else
     [ "${KSU_VARIANT}" == "SukiSU" ] && echo "ShirkNeko 仓库无分支 $SUSFS_BRANCH，改用 simonpunk 原版"
     clone_with_retry https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   fi
 
@@ -735,12 +713,11 @@ stage_clone_susfs() {
         echo "SUSFS 变体钉住: ${KSU_VARIANT} + ${SUSFS_BRANCH} -> ${SUSFS_PIN}"
         checkout_susfs_commit "$SUSFS_PIN" || {
           echo "::error::SUSFS 钉住提交不可用: ${SUSFS_PIN}（上游可能已 force push，需更新 scripts/build_kernel.sh 的钉住表）"
-          cd "$_pwd"; return 1
+          return 1
         }
       fi
     fi
   fi
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if: inputs.enable_susfs）：
@@ -918,7 +895,6 @@ run_sync_kernel_source() { stage_sync_kernel_source "$@"; }
 
 stage_apply_stock_config() {
   log_stage "apply_stock_config" "应用 Stock Config 伪装"
-  local _pwd="$PWD"
   STOCK_SRC="$WORKSPACE/config/stock_defconfig"
   STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
 
@@ -953,14 +929,12 @@ stage_apply_stock_config() {
     exit 1
   fi
 
-  cd "$_pwd"
 }
 
 run_apply_stock_config() { stage_apply_stock_config "$@"; }
 
 stage_extract_sublevel() {
   log_stage "extract_sublevel" "提取实际子版本号"
-  local _pwd="$PWD"
   ACTUAL_SUBLEVEL="${SUB_LEVEL}"
   if [[ -f "$KERNEL_ROOT/common/Makefile" ]]; then
     EXTRACTED=$(grep '^SUBLEVEL = ' "$KERNEL_ROOT/common/Makefile" | awk '{print $3}')
@@ -986,7 +960,6 @@ stage_extract_sublevel() {
   export NAME_SUBLEVEL="$NAME_SUBLEVEL"
   echo "NAME_SUBLEVEL=$NAME_SUBLEVEL" >> "${GITHUB_ENV:-/dev/null}"
 
-  cd "$_pwd"
 }
 
 run_extract_sublevel() { stage_extract_sublevel "$@"; }
@@ -1143,7 +1116,6 @@ resolve_sukisu_version() {
 
 stage_resolve_ksu_branch() {
   log_stage "resolve_ksu_branch" "确定 KernelSU 分支"
-  local _pwd="$PWD"
   variant_input="${KSU_VARIANT}"
 
   # KSU_BRANCH_MODE 手动指定分支：
@@ -1270,7 +1242,6 @@ stage_resolve_ksu_branch() {
   export BRANCH="$BRANCH"
   echo "KSU 分支: $BRANCH (mode=$BRANCH_MODE)"
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2314,13 +2285,11 @@ run_gen_susfs_patch() {
 
 stage_clone_droidspaces() {
   log_stage "clone_droidspaces" "克隆 Droidspaces 补丁仓库"
-  local _pwd="$PWD"
   clone_with_retry https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS --depth 1 || {
-    echo "::error::Droidspaces-OSS 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::Droidspaces-OSS 克隆失败"; return 1
   }
   export DROIDSPACES_PATCHES="/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI"
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2334,9 +2303,7 @@ run_clone_droidspaces() {
 
 stage_backup_defconfig() {
   log_stage "backup_defconfig" "备份基准 defconfig"
-  local _pwd="$PWD"
   cp "$DEFCONFIG" "$DEFCONFIG.orig"
-  cd "$_pwd"
 }
 
 run_backup_defconfig() { stage_backup_defconfig "$@"; }
@@ -2991,7 +2958,6 @@ run_fix_66_wifi_bt() {
 
 stage_config_zram() {
   log_stage "config_zram" "配置 ZRAM 选项"
-  local _pwd="$PWD"
   CONFIG_FILE="$DEFCONFIG"
 
   if [ "${KERNEL_VERSION}" = "5.10" ]; then
@@ -3064,7 +3030,6 @@ EOF
     echo "已显式钉住 zram 默认压缩算法（bazel fragment 路径）: CONFIG_ZRAM_DEF_COMP_LZ4KD=y"
   fi
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -3497,7 +3462,6 @@ run_config_kernel() { stage_config_kernel "$@"; }
 
 stage_config_susfs() {
   log_stage "config_susfs" "添加 SUSFS 配置"
-  local _pwd="$PWD"
   LINES_BEFORE=$(wc -l < "$DEFCONFIG")
   printf '%s\n' "${SUSFS_CONFIG_OPTIONS[@]}" >> "$DEFCONFIG"
 
@@ -3507,7 +3471,6 @@ stage_config_susfs() {
     echo "已导出 SUSFS 配置片段: $(wc -l < "$WORKSPACE/susfs-patch/susfs.config") 行"
   fi
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -3584,7 +3547,6 @@ run_config_kernel_name() { stage_config_kernel_name "$@"; }
 
 stage_set_build_time() {
   log_stage "set_build_time" "设置自定义构建时间"
-  local _pwd="$PWD"
   # 原函数内 `set -euo pipefail` 的 -u 会泄漏到后续所有阶段
   # （函数不创建子 shell），导致任一未绑定变量在编译后阶段莫名失败。
   # 改为与脚本顶层一致的 -eo pipefail，去掉 -u。
@@ -3632,7 +3594,6 @@ stage_set_build_time() {
   fi
 fi
 
-  cd "$_pwd"
 }
 
 run_set_build_time() { stage_set_build_time "$@"; }
@@ -3874,7 +3835,6 @@ run_verify_config_landing() { stage_verify_config_landing "$@"; }
 
 stage_collect_fail_log() {
   log_stage "collect_fail_log" "整理编译失败日志"
-  local _pwd="$PWD"
   LOG_DIR="$WORKSPACE/build-logs"
   mkdir -p "$LOG_DIR"
 
@@ -3897,7 +3857,6 @@ stage_collect_fail_log() {
   df -h "$WORKSPACE" > "$LOG_DIR/disk-usage.txt" 2>&1 || true
   ccache -s > "$LOG_DIR/ccache-stats.txt" 2>&1 || true
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -4224,7 +4183,6 @@ anykernel3_zip_name() {
 
 stage_prepare_boot() {
   log_stage "prepare_boot" "准备 Boot 镜像"
-  local _pwd="$PWD"
   mkdir -p bootimgs
 
   if [ "${ANDROID_VERSION}" == "android12" ] || [ "${ANDROID_VERSION}" == "android13" ]; then
@@ -4270,7 +4228,6 @@ stage_prepare_boot() {
     rm -f ./Image.lz4 ./bootimgs/Image.lz4
   fi
 
-  cd "$_pwd"
 }
 
 run_prepare_boot() { stage_prepare_boot "$@"; }
@@ -4455,7 +4412,6 @@ run_build_boot_a13plus() {
 
 stage_collect_conflicts() {
   log_stage "collect_conflicts" "收集补丁冲突文件"
-  local _pwd="$PWD"
   REJECTS_DIR="$WORKSPACE/patch-rejects"
   mkdir -p "$REJECTS_DIR"
 
@@ -4488,7 +4444,6 @@ stage_collect_conflicts() {
     done
   fi
 
-  cd "$_pwd"
 }
 
 run_collect_conflicts() { stage_collect_conflicts "$@"; }
