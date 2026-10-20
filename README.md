@@ -168,7 +168,7 @@
 
 | 产物 | 命名规则 | 何时出现 |
 |---|---|---|
-| 刷机包 | `<android版本>-<内核版本>.<子版本>-<os_patch_level>-AnyKernel3.zip`，例 `android14-6.1.177-2025-02-AnyKernel3.zip`（`anykernel3_zip_name()`，`scripts/build_kernel.sh:4221-4222`） | 每次构建；「仅上传 AnyKernel3.zip」模式下是唯一产物 |
+| 刷机包 | `<android版本>-<内核版本>.<子版本>-<os_patch_level>-AnyKernel3.zip`，例 `android14-6.1.177-2025-02-AnyKernel3.zip`（`anykernel3_zip_name()`，`scripts/build_kernel.sh:4180-4182`） | 每次构建；「仅上传 AnyKernel3.zip」模式下是唯一产物 |
 | 内核镜像 | `*.img` → artifact `…-Images` | 仅「上传全部」模式 |
 | 构建日志 | `build-logs/` → artifact `…-Build-Logs`；`main.yml` 汇总为 `AIO-BUILD-LOGS.zip` | 每次构建 |
 | 补丁拒绝汇总 | `patch-rejects/` → artifact `…-Rejects`；`main.yml` 汇总为 `AIO-REJ.zip` | 有 hunk 失配时非空 |
@@ -176,7 +176,7 @@
 | SUSFS 探测报告 | `susfs-probe/` → artifact `SUSFS-Probe-…` | 每次构建 |
 | ccache 缓存 | Release `Build Cache`（tag `ccache-cache`），资产 `cache-<分支>-<android>-<kernel>-<sub>.tar.zst`（另带 `.hmac`） | 勾 `use_release_cache` 时 |
 
-AnyKernel3.zip 里就是 [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) 的模板目录 + 刚编出的 `Image`（`scripts/build_kernel.sh:4282-4291`）；产物名由 `anykernel3_zip_name()` 生成，`SUB_LEVEL` 会直接拼进文件名。
+AnyKernel3.zip 里就是 [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) 的模板目录 + 刚编出的 `Image`（`scripts/build_kernel.sh:4235-4250`）；产物名由 `anykernel3_zip_name()` 生成，`SUB_LEVEL` 会直接拼进文件名。
 
 
 仓库当前共有 15 个工作流文件、`scripts/build_kernel.sh` 4751 行、`build.yml` 21 个步骤。
@@ -197,9 +197,9 @@ AnyKernel3.zip 里就是 [WildKernels/AnyKernel3](https://github.com/WildKernels
 
 KPM 需要以下条件**同时**满足：
 
-1. **变体提供 KPM** —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）。`BakaSU` / `FinaSU` / `Official` / `Next` 的内核**没有 `config KPM`**，请求了也会被跳过并打印警告（`scripts/build_kernel.sh:1618-1619`，`stage_add_kernelsu` 里的 `KPM_SUPPORTED` 判定）。
+1. **变体提供 KPM** —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）。`BakaSU` / `FinaSU` / `Official` / `Next` 的内核**没有 `config KPM`**，请求了也会被跳过并打印警告（`scripts/build_kernel.sh:1585-1594`，`stage_add_kernelsu` 里的 `KPM_SUPPORTED` 判定）。
 2. **内核 ≤ 6.6** —— 6.10 及以上会自动关闭（`kpm/super_access.c` 用了新内核已移除的 `netlink_kernel_cfg.cb_mutex`）。
-3. **内核 ≠ 6.6** —— 6.6 是特例：构建脚本会写入 `CONFIG_KPM=y`，但**跳过 Image 修补**，模块实际加载不了，日志会打印「6.6 内核不支持 KPM 镜像修补」（`scripts/build_kernel.sh:3939`）。
+3. **内核 ≠ 6.6** —— 6.6 是特例：构建脚本会写入 `CONFIG_KPM=y`，但**跳过 Image 修补**，模块实际加载不了，日志会打印「6.6 内核不支持 KPM 镜像修补」（`scripts/build_kernel.sh:3898`）。
 
 **因此当前真正能加载 KPM 的组合是：SukiSU 系 + 内核 ≤ 6.1。**
 
@@ -294,12 +294,12 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 |---|---|---|
 | `fs/namespace.c Hunk #1 FAILED at 32`（或 `task_mmu.c` / `exec.c` 同类 `Hunk #N FAILED`） | 月度源码树与 SUSFS 补丁对 `#include` 的行数不一致（多一行或少一行）→ hunk 上下文整段失配 | 已有 `adjust_context_include()` 自动补/删并在打完后还原（`scripts/susfs_fixes/apply.sh:50-123`）。若仍失败，看日志里打印的该文件 include 列表与补丁期望的 hunk |
 | `undefined symbol: fake_state` | 补丁按旧 `fake_state` 模型 `extern`，而 BakaSU / FinaSU 上游早已换成 `backup_sepolicy` + `security_*_with_policy` | 自动改写（`adapt_finasu_selinux_hide_model`，同样在 `susfs_fixes/apply.sh`）；若日志说「改写 N 处」后仍有残留，脚本会直接中止 |
-| `undefined symbol: my_setprocattr / my_write_context / my_write_access` | SUSFS 已切「接管式」，要求 KernelSU 以非 `static` 符号导出这三个；该变体 / 内核组合不满足 | 脚本内置变体钉表（`scripts/build_kernel.sh:727-731`）会在你未显式指定时自动钉住；也可手动 `manager_commit=0,<SUSFS提交>`。BakaSU 必须 `c06d5f8`，见上文 |
+| `undefined symbol: my_setprocattr / my_write_context / my_write_access` | SUSFS 已切「接管式」，要求 KernelSU 以非 `static` 符号导出这三个；该变体 / 内核组合不满足 | 脚本内置变体钉表（`scripts/build_kernel.sh:705-709`）会在你未显式指定时自动钉住；也可手动 `manager_commit=0,<SUSFS提交>`。BakaSU 必须 `c06d5f8`，见上文 |
 | `implicit declaration of function close_fd` | FinaSU 上游补丁按 ≥5.15 的 `close_fd()` 写死，而 5.10 只有 `__close_fd(files, fd)` | `scripts/finasu_compat/apply.sh` 自动改回 `ksu_close_fd()`（ksyscall 宏，与版本无关） |
-| `CONFIG_ZRAM_DEF_COMP_LZ4KD` 不在生成的 `.config` 里…Kconfig 未认领该符号 | kleaf/bazel 路径下 `defconfig_fragment` 合并太晚，choice 回落到首个可见成员且值粘性 | 已由 `stage_config_zram` 显式钉住并写出其余成员 `# … is not set`（`scripts/build_kernel.sh:3047-3064`） |
+| `CONFIG_ZRAM_DEF_COMP_LZ4KD` 不在生成的 `.config` 里…Kconfig 未认领该符号 | kleaf/bazel 路径下 `defconfig_fragment` 合并太晚，choice 回落到首个可见成员且值粘性 | 已由 `stage_config_zram` 显式钉住并写出其余成员 `# … is not set`（`scripts/build_kernel.sh:3013-3030`） |
 | BBG `flask.h` 阶段 `ld: cannot find …` / 找不到 `ld` | `GKI build/build.sh` 在 `make mrproper` 之前重写了 `PATH`（不含 `/usr/bin`）；apt 装 binutils 对它无效，且该步会自愈 | **不要**当成依赖缺失去改，见 `scripts/build_kernel.sh` 里的相关注释 |
 | `Please wait susfs update.` 或 SUSFS 构建被拦 | BakaSU 上游主动挂起 SUSFS 构建（`suspend susfs build`） | 设计内拦截；钉 `c06d5f8` 或等上游解除，`resume_susfs.sh` 在上游解除后自动 no-op |
-| `redefinition … struct lsm_id` vs `const struct lsm_id` | sukisu_compat 与内核树重复定义 `lsm_id` | 守卫同时认 `ksu_lsm_id`（`scripts/build_kernel.sh:3392-3396`） |
+| `redefinition … struct lsm_id` vs `const struct lsm_id` | sukisu_compat 与内核树重复定义 `lsm_id` | 守卫同时认 `ksu_lsm_id`（`scripts/build_kernel.sh:3361-3363`） |
 | 矩阵全 skipped 却算成功、发出空 Release | 旧版把 `skipped` 当通过；空矩阵判断缺失 | 已修：`main.yml` 判 `count`、`check_build` 重写、空矩阵 job 加 `if` |
 
 更多环境要求、断点续建与单步调试见 [本地构建文档](docs/local-build.md)。
