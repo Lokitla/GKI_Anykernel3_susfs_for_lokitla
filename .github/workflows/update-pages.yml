@@ -26,6 +26,8 @@ concurrency:
 jobs:
   update-data:
     runs-on: ubuntu-24.04
+    # 注意：data-changed 当前未被消费（deploy-pages 用 needs 无条件依赖、
+    # 从不读该输出，所以无数据变化也会重新部署）。仅保留声明，不改变行为。
     outputs:
       data-changed: ${{ steps.commit.outputs.changed }}
     steps:

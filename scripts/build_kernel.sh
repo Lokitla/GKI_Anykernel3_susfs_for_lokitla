@@ -52,13 +52,13 @@ set -eo pipefail
 #                            自身的两处编译缺陷）
 #   SUSFS_PIN_TIME        -> ISO 8601 时刻，把 susfs4ksu 固定到该时刻之前最后一次
 #                            提交，让同一轮探测的所有任务用同一份上游代码。
-#                            这一项已完整实现（见 clone_deps 阶段）。
+#                            这一项已完整实现（见 clone_susfs 阶段，stage_clone_susfs）。
 : "${SUSFS_RAW_PROBE:=false}"
 : "${SUSFS_SIDE_FIXES:=false}"
 : "${SUSFS_PIN_TIME:=}"
 
 # SUSFS 开关清单——与 SukiSU builtin 分支 kernel/Kconfig 里的 KSU_SUSFS* 一一对应
-# （builtin 的 Kconfig 共 11 项：KSU_SUSFS 总开关 + 下面 9 个子项；main 分支 0 项）。
+# （builtin 的 Kconfig 共 10 项：KSU_SUSFS 总开关 + 下面 9 个子项；main 分支 0 项）。
 # 单一真相源：写 defconfig 和编译前核对 Kconfig 都从这里取，避免两处各写一份而漂移。
 SUSFS_CONFIG_OPTIONS=(
   CONFIG_KSU_SUSFS=y
@@ -213,7 +213,6 @@ log_stage() {
 # ---------------------------- 阶段函数 ----------------------------
 stage_summary() {
   log_stage "summary" "构建信息摘要"
-  local _pwd="$PWD"
   echo "========================================"
   echo "       内核构建配置摘要"
   echo "========================================"
@@ -245,18 +244,15 @@ stage_summary() {
   fi
   echo "========================================"
 
-
   # BBR 开关展示（zzh20188 原摘要没有该项）
   echo "BBR 拥塞控制: ${USE_BBR}"
 
-  cd "$_pwd"
 }
 
 run_summary() { stage_summary "$@"; }
 
 stage_cleanup_disk() {
   log_stage "cleanup_disk" "清理磁盘空间"
-  local _pwd="$PWD"
   # 先并行 mv 到临时目录（瞬时完成），再在后台低优先级删除，不阻塞后续步骤
   # 临时目录必须放在工作区之外：checkout 会以 runner 用户清空工作区，
   # 遇到 sudo mv 进来的 root 属主文件会 EACCES 失败
@@ -305,7 +301,6 @@ stage_cleanup_disk() {
   ) >/dev/null 2>&1 &
   disown
 
-  cd "$_pwd"
 }
 
 # 安全门：仅 GitHub Actions runner 执行，本地构建跳过以免破坏系统
@@ -319,7 +314,6 @@ run_cleanup_disk() {
 
 stage_init_env() {
   log_stage "init_env" "初始化构建环境"
-  local _pwd="$PWD"
   CONFIG="${ANDROID_VERSION}-${KERNEL_VERSION}-${SUB_LEVEL}"
   KERNEL_ROOT="$WORKSPACE/$CONFIG"
   mkdir -p "$KERNEL_ROOT"
@@ -355,19 +349,18 @@ stage_init_env() {
   # -f 保证 HTTP 错误页不会被当成成功写进 repo 文件。
   curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 \
     https://storage.googleapis.com/git-repo-downloads/repo \
-    -o "$WORKSPACE/git-repo/repo"
+    -o "$WORKSPACE/git-repo/repo" \
+    || { echo "::error::下载 repo 工具失败"; return 1; }
   chmod 0755 "$WORKSPACE/git-repo/repo"
   export PATH="$WORKSPACE/git-repo:$PATH"
   export REPO="$WORKSPACE/git-repo/repo"
 
-  cd "$_pwd"
 }
 
 run_init_env() { stage_init_env "$@"; }
 
 stage_show_config() {
   log_stage "show_config" "显示配置信息"
-  local _pwd="$PWD"
   CONFIG_FILE="$WORKSPACE/config/config"
   if [ -f "$CONFIG_FILE" ]; then
     echo "加载配置文件: $CONFIG_FILE"
@@ -378,51 +371,65 @@ stage_show_config() {
     cat "$LEGACY_SUKISU_CONFIG"
   fi
 
-  cd "$_pwd"
 }
 
 run_show_config() { stage_show_config "$@"; }
 
 stage_install_deps() {
   log_stage "install_deps" "安装编译依赖"
-  local _pwd="$PWD"
-  sudo apt-get update
-  sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4
+  # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
+  # 错误要等到编译期才以「找不到 bison / flex」的形式暴露，排查成本极高。
+  # 装依赖失败绝不能继续，所以逐条显式检查退出码。
+  sudo apt-get update \
+    || { echo "::error::apt-get update 失败，编译依赖无法安装"; return 1; }
+  # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
+  #
+  # 但它**不能**消除日志里那条
+  #   clang-12: error: unable to execute command: Executable "ld" doesn't exist!
+  # 该行来自 BBG 在 make mrproper 阶段生成 security/selinux/flask.h 的子 make：
+  # GKI 的 build/build.sh 会把 PATH 重写为 prebuilts 目录（不含 /usr/bin），
+  # 所以 apt 装的 ld 不在其搜索路径内，日志里也可见 "binutils is already the
+  # newest version"。这条错误随后被 BBG 自愈路径盖住（先打印 "-- BBG was
+  # enabled!"，稍后内核正规流程 GEN security/selinux/flask.h，再出现
+  # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
+  # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
+  sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
+    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; return 1; }
 
-  cd "$_pwd"
 }
 
 run_install_deps() { stage_install_deps "$@"; }
 
 stage_setup_ccache() {
   log_stage "setup_ccache" "配置 ccache"
-  local _pwd="$PWD"
-  mkdir -p ~/.cache/bazel
+  # ccache 只是加速手段，配置失败不应中断构建（缺 ccache 时编译照样能完成）。
+  # 但在 `if ! run_xxx` 上下文里 errexit 被抑制，这些失败原本连日志都没有，故显式告警。
+  mkdir -p ~/.cache/bazel \
+    || echo "::warning::无法创建 ~/.cache/bazel（不影响构建）"
   ccache --version
-  ccache --max-size=2G
-  ccache --set-config=compression=true
+  ccache --max-size=2G \
+    || echo "::warning::ccache --max-size 失败（仅影响缓存大小，不影响构建）"
+  ccache --set-config=compression=true \
+    || echo "::warning::ccache 压缩配置失败（不影响构建）"
   export CCACHE_DIR="$HOME/.ccache"
 
-  cd "$_pwd"
 }
 
 run_setup_ccache() { stage_setup_ccache "$@"; }
 
 stage_download_toolchain() {
   log_stage "download_toolchain" "下载工具链"
-  local _pwd="$PWD"
   AOSP_MIRROR=https://android.googlesource.com
   BRANCH=main-kernel-build-2024
   # 工具链来自 android.googlesource.com，与 GitHub/GitLab 分属不同基建，但同样是
   # 下游一切编译的前提：这里失败，后面每一步都无可挽回。同样走退避重试。
   clone_with_retry $AOSP_MIRROR/kernel/prebuilts/build-tools kernel-build-tools -b $BRANCH --depth 1 || {
-    echo "::error::AOSP 工具链 build-tools 克隆失败（分支 $BRANCH）"; cd "$_pwd"; return 1
+    echo "::error::AOSP 工具链 build-tools 克隆失败（分支 $BRANCH）"; return 1
   }
   clone_with_retry $AOSP_MIRROR/platform/system/tools/mkbootimg mkbootimg -b $BRANCH --depth 1 || {
-    echo "::error::AOSP mkbootimg 克隆失败（分支 $BRANCH）"; cd "$_pwd"; return 1
+    echo "::error::AOSP mkbootimg 克隆失败（分支 $BRANCH）"; return 1
   }
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -436,7 +443,6 @@ run_download_toolchain() {
 
 stage_gen_sign_key() {
   log_stage "gen_sign_key" "生成签名密钥"
-  local _pwd="$PWD"
   # 复用已有密钥以保证 boot 签名可复现，仅在缺失时生成；公钥归档便于审计
   #
   # 注意（可复现性）：该 pem 位于 kernel-build-tools/ 内，会随「缓存工具链」
@@ -465,14 +471,12 @@ stage_gen_sign_key() {
       >> "$WORKSPACE/build-logs/build-info.txt"
   fi
 
-  cd "$_pwd"
 }
 
 run_gen_sign_key() { stage_gen_sign_key "$@"; }
 
 stage_setup_git() {
   log_stage "setup_git" "配置 Git"
-  local _pwd="$PWD"
   git config --global user.name "BuildBot"
   git config --global user.email "BuildGkiKernel@gmail.com"
   # 上游 git 服务偶发连接停滞：传输速率低于 1KB/s 持续 180 秒即中止，
@@ -480,7 +484,6 @@ stage_setup_git() {
   git config --global http.lowSpeedLimit 1000
   git config --global http.lowSpeedTime 180
 
-  cd "$_pwd"
 }
 
 run_setup_git() { stage_setup_git "$@"; }
@@ -523,7 +526,6 @@ clone_with_retry() {
 
 stage_clone_deps() {
   log_stage "clone_deps" "克隆依赖仓库"
-  local _pwd="$PWD"
   ANYKERNEL_BRANCH="gki-2.0"
 
   # 只取工作树所需文件，全部浅克隆：这些仓库每次构建都会被 80+ 个任务各拉一遍，
@@ -536,26 +538,25 @@ stage_clone_deps() {
   echo "克隆 AnyKernel3..."
   clone_with_retry https://github.com/WildKernels/AnyKernel3.git AnyKernel3 -b "$ANYKERNEL_BRANCH" || {
     echo "::error::AnyKernel3 克隆失败（分支 $ANYKERNEL_BRANCH）"
-    cd "$_pwd"; return 1
+    return 1
   }
   rm -rf AnyKernel3/.git
 
   # 注意：阶段函数是在 `if ! "run_${p}"` 里被调用的，bash 会因此在函数体内部
   # 关闭 `set -e`，所以这里的每一步都必须自己判失败并 return 1；否则克隆失败后
-  # 函数会带着最后的 `cd "$_pwd"`（返回 0）"成功"退出，一路编到一个缺依赖的内核。
+  # 函数会带着最后一条命令的退出码「成功」退出，一路编到一个缺依赖的内核。
   echo "准备补丁资源..."
   clone_with_retry https://github.com/WildKernels/kernel_patches.git kernel_patches || {
-    echo "::error::kernel_patches 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::kernel_patches 克隆失败"; return 1
   }
   clone_with_retry https://github.com/SukiSU-Ultra/SukiSU_patch.git SukiSU_patch || {
-    echo "::error::SukiSU_patch 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::SukiSU_patch 克隆失败"; return 1
   }
   echo "使用当前仓库补丁目录: $ZZH_PATCHES"
   clone_with_retry https://github.com/Numbersf/Action-Build.git Action-Build --depth=1 || {
-    echo "::error::Action-Build 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::Action-Build 克隆失败"; return 1
   }
 
-  cd "$_pwd"
 }
 
 run_clone_deps() { stage_clone_deps "$@"; }
@@ -570,7 +571,6 @@ run_clone_deps() { stage_clone_deps "$@"; }
 # **不钉上游 commit**：分支永远取 gki-<android>-<kernel>，跟随上游更新。
 stage_clone_susfs() {
   log_stage "clone_susfs" "克隆 SUSFS 补丁源"
-  local _pwd="$PWD"
   SUSFS_BRANCH="gki-${ANDROID_VERSION}-${KERNEL_VERSION}"
 
   echo "克隆 SUSFS (分支: $SUSFS_BRANCH)..."
@@ -590,16 +590,16 @@ stage_clone_susfs() {
 
   if [ -n "$LEGACY_SUKISU_CONFIG" ]; then
     clone_with_retry https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   elif [ "${KSU_VARIANT}" == "SukiSU" ] && remote_has_branch https://github.com/ShirkNeko/susfs4ksu.git "$SUSFS_BRANCH"; then
     clone_with_retry https://github.com/ShirkNeko/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::ShirkNeko/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::ShirkNeko/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   else
     [ "${KSU_VARIANT}" == "SukiSU" ] && echo "ShirkNeko 仓库无分支 $SUSFS_BRANCH，改用 simonpunk 原版"
     clone_with_retry https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b "$SUSFS_BRANCH" || {
-      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; cd "$_pwd"; return 1
+      echo "::error::simonpunk/susfs4ksu 克隆失败（分支 $SUSFS_BRANCH）"; return 1
     }
   fi
 
@@ -673,7 +673,51 @@ stage_clone_susfs() {
     fi
   fi
 
-  cd "$_pwd"
+  # 变体内置钉住表：SukiSU 系在未显式指定提交时，钉到「补丁形态与 builtin
+  # KernelSU 符号集能对上」的上游提交，而不是分支最新。
+  #
+  # 为什么必须钉：susfs4ksu 在 2026-10-18/19 把 SELinux 部分改成「接管式」模型——
+  # 内核补丁不再自带 static my_setprocattr / my_write_context / my_write_access
+  # 的实现，改成 extern 引用 KernelSU 侧导出，并新增 ksu_setup_preinit_file /
+  # ksu_preinit_handle_post_execveat。而 SukiSU 的 builtin 分支（开 SUSFS 时走的那条）
+  # 只有 165 行的 selinux_hide.c，既不导出这些符号也没有 preinit 目录，于是链接期固定报
+  #   undefined symbol: my_setprocattr / my_write_context / my_write_access
+  #   undefined symbol: ksu_setup_preinit_file / ksu_preinit_handle_post_execveat
+  # 矩阵里 a13/a14/a15 三条 SukiSU 全红都是这一个原因，与内核源码无关。
+  #
+  # 选型判据只有一条：该提交的 50_add_susfs 补丁自带 my_* / my_security_* 定义
+  # （static 或非 static 都行），且它 extern 的东西 builtin 恰好都有
+  # （fake_state 仅 <6.6 有；fake_status / fake_status_initialize_key /
+  # initialize_fake_status / ksu_selinux_hide_enabled|running / backup_sepolicy 各版本都有）。
+  #   a12/a13/a14 用各自 gen1（需 fake_state + 自带 static my_*，无 with_policy 依赖）
+  #   a15 用 gen2 自持版（自带非 static my_security_*，不碰 fake_state / with_policy）
+  #   a16 只有 simonpunk 有分支，用同形态的 gen2 自持版
+  # 显式 SUSFS_COMMIT 与环境变量 SUSFS_PIN_TIME 的优先级仍高于本表（见上方分支）。
+  # 若上游之后把这些提交删了（force push），checkout_susfs_commit 会失败并让整轮构建
+  # 红掉——这是有意的：宁可红，也不要静默编出一个缺符号的内核。
+  if [ -z "${SUSFS_PIN_TIME:-}" ] && [ -z "$LEGACY_SUKISU_CONFIG" ] && [ -z "${SUSFS_COMMIT:-}" ]; then
+    SUSFS_CUSTOM_OFF=1
+    if [ -f "config/config" ] && [ "$(grep "^custom=" config/config | cut -d'=' -f2)" == "true" ]; then
+      SUSFS_CUSTOM_OFF=0
+    fi
+    if [ "$SUSFS_CUSTOM_OFF" == "1" ]; then
+      case "${KSU_VARIANT}:${SUSFS_BRANCH}" in
+        SukiSU:gki-android12-5.10) SUSFS_PIN="6dc93089a0cedfec3d31739e747231f99d751e9e" ;;
+        SukiSU:gki-android13-5.15) SUSFS_PIN="e95584432759ebe28e020e7c459ddc7da32eeba6" ;;
+        SukiSU:gki-android14-6.1)  SUSFS_PIN="357d43f13ea2d2bcff709fb63a8dbac76e1ebd64" ;;
+        SukiSU:gki-android15-6.6)  SUSFS_PIN="afb39173a6cc9f188093e7c8b71b709fc40f6565" ;;
+        SukiSU:gki-android16-6.12) SUSFS_PIN="bd2756895e557f339b6304b57e4de131868ea429" ;;
+        *) SUSFS_PIN="" ;;
+      esac
+      if [ -n "$SUSFS_PIN" ]; then
+        echo "SUSFS 变体钉住: ${KSU_VARIANT} + ${SUSFS_BRANCH} -> ${SUSFS_PIN}"
+        checkout_susfs_commit "$SUSFS_PIN" || {
+          echo "::error::SUSFS 钉住提交不可用: ${SUSFS_PIN}（上游可能已 force push，需更新 scripts/build_kernel.sh 的钉住表）"
+          return 1
+        }
+      fi
+    fi
+  fi
 }
 
 # 条件执行（等价原工作流 if: inputs.enable_susfs）：
@@ -851,7 +895,6 @@ run_sync_kernel_source() { stage_sync_kernel_source "$@"; }
 
 stage_apply_stock_config() {
   log_stage "apply_stock_config" "应用 Stock Config 伪装"
-  local _pwd="$PWD"
   STOCK_SRC="$WORKSPACE/config/stock_defconfig"
   STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
 
@@ -886,14 +929,12 @@ stage_apply_stock_config() {
     exit 1
   fi
 
-  cd "$_pwd"
 }
 
 run_apply_stock_config() { stage_apply_stock_config "$@"; }
 
 stage_extract_sublevel() {
   log_stage "extract_sublevel" "提取实际子版本号"
-  local _pwd="$PWD"
   ACTUAL_SUBLEVEL="${SUB_LEVEL}"
   if [[ -f "$KERNEL_ROOT/common/Makefile" ]]; then
     EXTRACTED=$(grep '^SUBLEVEL = ' "$KERNEL_ROOT/common/Makefile" | awk '{print $3}')
@@ -906,6 +947,11 @@ stage_extract_sublevel() {
   if [ "$SUB_LEVEL" = "X" ]; then
     CONFIG="${ANDROID_VERSION}-${KERNEL_VERSION}-${ACTUAL_SUBLEVEL}"
     echo "CONFIG=$CONFIG" >> "${GITHUB_ENV:-/dev/null}"
+    # CONFIG 与 KERNEL_ROOT 必须成对重算：后续阶段按 KERNEL_ROOT 定位源码目录，
+    # 只同步 CONFIG 会让本 step 内的 KERNEL_ROOT 继续指向 ...-X，源码目录与产物名错位。
+    KERNEL_ROOT="$WORKSPACE/${CONFIG}"
+    export KERNEL_ROOT
+    echo "KERNEL_ROOT=$KERNEL_ROOT" >> "${GITHUB_ENV:-/dev/null}"
     NAME_SUBLEVEL="$ACTUAL_SUBLEVEL"
     echo "LTS 构建: 产物命名使用实际子版本号 $ACTUAL_SUBLEVEL"
   else
@@ -914,7 +960,6 @@ stage_extract_sublevel() {
   export NAME_SUBLEVEL="$NAME_SUBLEVEL"
   echo "NAME_SUBLEVEL=$NAME_SUBLEVEL" >> "${GITHUB_ENV:-/dev/null}"
 
-  cd "$_pwd"
 }
 
 run_extract_sublevel() { stage_extract_sublevel "$@"; }
@@ -958,13 +1003,18 @@ stage_fix_glibc() {
     GLIBC_VERSION=$(ldd --version 2>/dev/null | head -n 1 | awk '{print $NF}')
     if [ "$(printf '%s\n' "2.38" "$GLIBC_VERSION" | sort -V | head -n1)" = "2.38" ]; then
       echo "应用 glibc 2.38 兼容性修复..."
-      sed -i '/\$(Q)\$(MAKE) -C \$(SUBCMD_SRC) OUTPUT=\$(abspath \$(dir \$@))\/ \$(abspath \$@)/s//$(Q)$(MAKE) -C $(SUBCMD_SRC) EXTRA_CFLAGS="$(CFLAGS)" OUTPUT=$(abspath $(dir $@))\/ $(abspath $@)/' tools/bpf/resolve_btfids/Makefile 2>/dev/null || true
+      sed -i '/\$(Q)\$(MAKE) -C \$(SUBCMD_SRC) OUTPUT=\$(abspath \$(dir \$@))\/ \$(abspath \$@)/s//$(Q)$(MAKE) -C $(SUBCMD_SRC) EXTRA_CFLAGS="$(CFLAGS)" OUTPUT=$(abspath $(dir $@))\/ $(abspath $@)/' tools/bpf/resolve_btfids/Makefile 2>/dev/null \
+        || echo "::warning::resolve_btfids Makefile 的 glibc 2.38 补丁未生效（上下文不匹配）"
 
       if [[ "${KERNEL_VERSION}" == "5.10" || "${KERNEL_VERSION}" == "5.15" ]]; then
-        sed -i '/char \*buf = NULL;/a int i;' tools/lib/subcmd/parse-options.c 2>/dev/null || true
-        sed -i 's/for (int i = 0; subcommands\[i\]; i++) {/for (i = 0; subcommands[i]; i++) {/' tools/lib/subcmd/parse-options.c 2>/dev/null || true
-        sed -i '/if (subcommands) {/a int i;' tools/lib/subcmd/parse-options.c 2>/dev/null || true
-        sed -i 's/for (int i = 0; subcommands\[i\]; i++)/for (i = 0; subcommands[i]; i++)/' tools/lib/subcmd/parse-options.c 2>/dev/null || true
+        sed -i '/char \*buf = NULL;/a int i;' tools/lib/subcmd/parse-options.c 2>/dev/null \
+          || echo "::warning::parse-options.c 的 glibc 2.38 补丁（buf 声明）未生效（上下文不匹配）"
+        sed -i 's/for (int i = 0; subcommands\[i\]; i++) {/for (i = 0; subcommands[i]; i++) {/' tools/lib/subcmd/parse-options.c 2>/dev/null \
+          || echo "::warning::parse-options.c 的 glibc 2.38 补丁（for 循环括号）未生效（上下文不匹配）"
+        sed -i '/if (subcommands) {/a int i;' tools/lib/subcmd/parse-options.c 2>/dev/null \
+          || echo "::warning::parse-options.c 的 glibc 2.38 补丁（subcommands 声明）未生效（上下文不匹配）"
+        sed -i 's/for (int i = 0; subcommands\[i\]; i++)/for (i = 0; subcommands[i]; i++)/' tools/lib/subcmd/parse-options.c 2>/dev/null \
+          || echo "::warning::parse-options.c 的 glibc 2.38 补丁（for 循环无括号）未生效（上下文不匹配）"
       fi
     fi
   fi
@@ -1066,7 +1116,6 @@ resolve_sukisu_version() {
 
 stage_resolve_ksu_branch() {
   log_stage "resolve_ksu_branch" "确定 KernelSU 分支"
-  local _pwd="$PWD"
   variant_input="${KSU_VARIANT}"
 
   # KSU_BRANCH_MODE 手动指定分支：
@@ -1193,7 +1242,6 @@ stage_resolve_ksu_branch() {
   export BRANCH="$BRANCH"
   echo "KSU 分支: $BRANCH (mode=$BRANCH_MODE)"
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -1372,9 +1420,9 @@ stage_add_kernelsu() {
           TMP_APK_DIR=$(mktemp -d)
           curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
             -o "$TMP_APK_DIR/manager.apk" "$REL_APK_URL" \
-            || { echo "::error::下载 FinaSU Release APK 失败"; return 1; }
+            || { echo "::error::下载 FinaSU Release APK 失败"; rm -rf "$TMP_APK_DIR"; return 1; }
           CERT_INFO=$(python3 "$WORKSPACE/scripts/finasu_compat/extract_manager_cert.py" "$TMP_APK_DIR/manager.apk") \
-            || { echo "::error::无法提取 FinaSU 管理器签名证书"; return 1; }
+            || { echo "::error::无法提取 FinaSU 管理器签名证书"; rm -rf "$TMP_APK_DIR"; return 1; }
           rm -rf "$TMP_APK_DIR"
           KSU_CERT_SIZE=$(awk 'NR == 1 {print $1}' <<< "$CERT_INFO")
           KSU_CERT_HASH=$(awk 'NR == 1 {print $2}' <<< "$CERT_INFO")
@@ -1623,6 +1671,8 @@ stage_sync_ksu_uapi() {
   #   这里改为按 $BRANCH（本阶段解析出的实际检出分支）选路径。
   case "${KSU_VARIANT}" in
     SukiSU|SukiSU\(*\))
+      # builtin-new / builtin-rebase 当前没有生产者（resolve_ksu_branch 只产出
+      # main / master / builtin / dev / 具体 commit）；保留是为了上游再加分支时不用改这里。
       case "${BRANCH:-main}" in
         builtin|builtin-new|builtin-rebase)
           UAPI_UPSTREAM="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${BRANCH}/kernel/include/uapi/supercall.h" ;;
@@ -1672,10 +1722,13 @@ stage_apply_sukisu_compat() {
     return 0
   fi
 
+  # 这里不能降级成 warning：SukiSU compat 补丁没打上，KernelSU 与内核其余
+  # 补丁（SUSFS / UAPI 同步）会按不同假设继续往下走，最后编出来的内核
+  # 语义是错的，而 CI 仍会绿。失败即中止本变体构建。
   bash "$WORKSPACE/scripts/sukisu_compat/apply.sh" KernelSU || {
-    echo "::warning::SukiSU compat 补丁应用失败（可能已应用或上下文不匹配）"
+    echo "::error::SukiSU compat 补丁应用失败（上下文不匹配或已被上游合入）"
     cd "$_pwd"
-    return 0
+    return 1
   }
 
   echo "SukiSU compat 补丁应用完成"
@@ -2025,8 +2078,12 @@ stage_apply_susfs() {
   # 补丁落地后立刻核对 Kconfig：只查 .rej 和源码注入还不够，
   # Kconfig 不认领的话 defconfig 写得再全也是白写。
   if [ "${ENABLE_SUSFS}" = "true" ] && [ "${KSU_MODE}" != "禁用KSU" ]; then
-    verify_susfs_kconfig
-    verify_susfs_selinux_compat
+    # 本函数由 `if ! run_apply_susfs` 调度，errexit 被抑制：裸调用的话
+    # verify_susfs_kconfig 的 return 1 不会中止，而后面任何一条校验成功
+    # 都会把 $? 覆盖成 0 —— SUSFS 没被 Kconfig 认领（CONFIG 不生效）
+    # 也能全绿产出「没有 SUSFS」的内核。两条都必须显式上抛。
+    verify_susfs_kconfig || return 1
+    verify_susfs_selinux_compat || return 1
   fi
 }
 
@@ -2046,18 +2103,36 @@ verify_susfs_selinux_compat() {
               "${KERNEL_ROOT}/common/security/selinux/hooks.c"; do
     [ -f "$cand" ] && { hooks_c="$cand"; break; }
   done
+  # 旧版本放行条件：KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 是 BakaSU 独有的
+  # 共存宏（kernel/tools/susfs_compat.mk 依据该符号定义），其它变体本就不存在
+  # 这个宏，缺失属预期而非缺陷；上游 BakaSU 在引入该宏之前的旧版本同理。
+  # 所以只有「确实该有这个宏的变体」（BakaSU）才硬失败，其余只告警。
+  local _needs_macro=0
+  if [ "${KSU_VARIANT}" = "BakaSU" ]; then
+    _needs_macro=1
+  fi
   if [ -z "$hooks_c" ]; then
-    echo "::warning::未找到 security/selinux/hooks.c（已试 ${KERNEL_ROOT} 与 ${KERNEL_ROOT}/common），跳过 SELinux 兼容宏前置条件检查"
+    if [ "$_needs_macro" = "1" ]; then
+      echo "::error::未找到 security/selinux/hooks.c（已试 ${KERNEL_ROOT} 与 ${KERNEL_ROOT}/common），无法证明 KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 成立"
+      return 1
+    fi
+    echo "::warning::未找到 security/selinux/hooks.c（已试 ${KERNEL_ROOT} 与 ${KERNEL_ROOT}/common），${KSU_VARIANT} 无该宏前置条件，跳过检查"
     return 0
   fi
   if grep -q "ksu_selinux_hide_running" "$hooks_c"; then
     echo "SELinux 兼容宏前置条件就绪：hooks.c 已含 ksu_selinux_hide_running"
-  else
-    echo "::warning::security/selinux/hooks.c 未找到 ksu_selinux_hide_running"
-    echo "  SUSFS 的 SELinux 补丁可能没打上，或该 SUSFS 分支换了符号名"
-    echo "  结果：KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 不会被定义，BakaSU 的"
-    echo "  ksu_patch_text 会与 SUSFS 的 my_* 替换冲突，SELinux 隐藏可能失效"
+    return 0
   fi
+  if [ "$_needs_macro" = "1" ]; then
+    echo "::error::security/selinux/hooks.c 未找到 ksu_selinux_hide_running，KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 不会被定义"
+    echo "::error::BakaSU 的 ksu_patch_text 会与 SUSFS 的 my_* 替换冲突，SELinux 隐藏必然失效（属上游 BakaSU 尚未同步该模型）"
+    return 1
+  fi
+  echo "::warning::security/selinux/hooks.c 未找到 ksu_selinux_hide_running"
+  echo "  SUSFS 的 SELinux 补丁可能没打上，或该 SUSFS 分支换了符号名"
+  echo "  结果：${KSU_VARIANT} 没有 KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 这个共存宏，"
+  echo "  ksu_patch_text 是否与 SUSFS 冲突由该变体自身的共存机制决定；此处仅告警不阻断"
+  return 0
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2212,13 +2287,11 @@ run_gen_susfs_patch() {
 
 stage_clone_droidspaces() {
   log_stage "clone_droidspaces" "克隆 Droidspaces 补丁仓库"
-  local _pwd="$PWD"
   clone_with_retry https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS --depth 1 || {
-    echo "::error::Droidspaces-OSS 克隆失败"; cd "$_pwd"; return 1
+    echo "::error::Droidspaces-OSS 克隆失败"; return 1
   }
   export DROIDSPACES_PATCHES="/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI"
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2232,9 +2305,7 @@ run_clone_droidspaces() {
 
 stage_backup_defconfig() {
   log_stage "backup_defconfig" "备份基准 defconfig"
-  local _pwd="$PWD"
   cp "$DEFCONFIG" "$DEFCONFIG.orig"
-  cd "$_pwd"
 }
 
 run_backup_defconfig() { stage_backup_defconfig "$@"; }
@@ -2455,7 +2526,10 @@ stage_inject_ntsync() {
   log_stage "inject_ntsync" "注入 NTSync 内核配置"
   local _pwd="$PWD"
   cd "${KERNEL_ROOT}"/common
-  set -e
+  # 注意：这里**不能**写 set -e。本阶段由 `if ! run_inject_ntsync` 调度，
+  # 该上下文会抑制函数体内的 errexit（写了也保护不了任何命令），却会把 -e
+  # 泄漏给父 shell，让其后所有阶段的行为取决于调用顺序（见 stage_set_build_time
+  # 头部注释里同类的坑）。需要严格退出的命令一律显式 `|| return 1`。
   echo "=== 开始注入 NTSync 内核补丁 ==="
   echo "Android 版本: ${ANDROID_VERSION}"
   echo "Kernel 版本: ${KERNEL_VERSION}"
@@ -2491,15 +2565,15 @@ stage_inject_ntsync() {
   fetch_remote_script \
     "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_base.patch" \
     ntsync_base.patch "ntsync_base.patch" "$NTSYNC_RE" true \
-    || { echo "::error::下载或校验 ntsync_base.patch 失败"; exit 1; }
+    || { echo "::error::下载或校验 ntsync_base.patch 失败"; cd "$_pwd"; return 1; }
   fetch_remote_script \
     "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/${NTSYNC_PATCH}.patch" \
     "${NTSYNC_PATCH}.patch" "${NTSYNC_PATCH}.patch" "$NTSYNC_RE" true \
-    || { echo "::error::下载或校验 ${NTSYNC_PATCH}.patch 失败"; exit 1; }
+    || { echo "::error::下载或校验 ${NTSYNC_PATCH}.patch 失败"; cd "$_pwd"; return 1; }
 
   # 补丁来自未钉版本的 main 分支，下载/应用失败必须显式报错而非静默跳过
-  patch -p1 --forward < "ntsync_base.patch" || { echo "::error::应用 ntsync_base.patch 失败"; exit 1; }
-  patch -p1 --forward < "${NTSYNC_PATCH}.patch" || { echo "::error::应用 ${NTSYNC_PATCH}.patch 失败"; exit 1; }
+  patch -p1 --forward < "ntsync_base.patch" || { echo "::error::应用 ntsync_base.patch 失败"; cd "$_pwd"; return 1; }
+  patch -p1 --forward < "${NTSYNC_PATCH}.patch" || { echo "::error::应用 ${NTSYNC_PATCH}.patch 失败"; cd "$_pwd"; return 1; }
 
   cd ..
 
@@ -2508,9 +2582,11 @@ stage_inject_ntsync() {
   echo "正在检查并启用 CONFIG_NTSYNC..."
 
   # 移除未启用标记，再追加启用项，保证重复运行时保持幂等。
-  sed -i '/CONFIG_NTSYNC is not set/d' "$CONFIG_PATH"
+  sed -i '/CONFIG_NTSYNC is not set/d' "$CONFIG_PATH" \
+    || { echo "::error::改写 $CONFIG_PATH 失败"; cd "$_pwd"; return 1; }
   if ! grep -q "^CONFIG_NTSYNC=y" "$CONFIG_PATH"; then
-    echo "CONFIG_NTSYNC=y" >> "$CONFIG_PATH"
+    echo "CONFIG_NTSYNC=y" >> "$CONFIG_PATH" \
+      || { echo "::error::写入 CONFIG_NTSYNC=y 失败"; cd "$_pwd"; return 1; }
     echo "✅ 已成功启用 CONFIG_NTSYNC"
   else
     echo "✅ CONFIG_NTSYNC 已处于启用状态"
@@ -2599,9 +2675,9 @@ stage_setup_zram_lz4() {
   echo "升级 LZ4..."
   rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
 
-  cp -r $ZZH_PATCHES/zram/lz4/* ./lib/lz4/
-  cp -r $ZZH_PATCHES/zram/include/linux/* ./include/linux/
-  bash $ZZH_PATCHES/zram/apply_lz4_neon.sh
+  cp -r "$ZZH_PATCHES"/zram/lz4/* ./lib/lz4/
+  cp -r "$ZZH_PATCHES"/zram/include/linux/* ./include/linux/
+  bash "$ZZH_PATCHES"/zram/apply_lz4_neon.sh
 
   if [ -f "fs/f2fs/Makefile" ] && ! grep -qF "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" "fs/f2fs/Makefile"; then
     echo "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" >> "fs/f2fs/Makefile"
@@ -2884,7 +2960,6 @@ run_fix_66_wifi_bt() {
 
 stage_config_zram() {
   log_stage "config_zram" "配置 ZRAM 选项"
-  local _pwd="$PWD"
   CONFIG_FILE="$DEFCONFIG"
 
   if [ "${KERNEL_VERSION}" = "5.10" ]; then
@@ -2934,7 +3009,29 @@ EOF
     fi
   fi
 
-  cd "$_pwd"
+  # bazel/kleaf 路径（树里没有 build/build.sh）只把 defconfig 的「新增行」当
+  # defconfig_fragment 合并，而 Kconfig choice 的默认值在首次 make gki_defconfig 时
+  # 就已经按当时可见的成员定死了：那一刻 fragment 还没合并、CRYPTO_LZ4KD 还是 n，
+  # 于是 default ZRAM_DEF_COMP_LZ4KD 不可见，choice 回落到第一个可见成员（LZO/LZORLE）；
+  # olddefconfig 之后也不会因为 CRYPTO_LZ4KD 被打开而改选默认值（choice 的值是粘性的）。
+  # 结果 .config 里永远没有 CONFIG_ZRAM_DEF_COMP_LZ4KD，verify_config_landing 必失败
+  # （报「Kconfig 未认领该符号，被静默丢弃」）。这里直接写死选择，并按 Kconfig 里真实
+  # 存在的成员逐个关掉——choice 同时选两个成员会被 Kconfig 丢弃其中一个。
+  if [ ! -f "$KERNEL_ROOT/build/build.sh" ]; then
+    ZRAM_KCONFIG_FILE="$KERNEL_ROOT/common/drivers/block/zram/Kconfig"
+    {
+      echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y"
+      if [ -f "$ZRAM_KCONFIG_FILE" ]; then
+        grep -E '^config[[:space:]]+ZRAM_DEF_COMP_' "$ZRAM_KCONFIG_FILE" \
+          | awk '{print $2}' | while read -r _zc; do
+              [ "$_zc" = "ZRAM_DEF_COMP_LZ4KD" ] && continue
+              echo "# CONFIG_$_zc is not set"
+            done
+      fi
+    } >> "$CONFIG_FILE" || true
+    echo "已显式钉住 zram 默认压缩算法（bazel fragment 路径）: CONFIG_ZRAM_DEF_COMP_LZ4KD=y"
+  fi
+
 }
 
 # 条件执行（等价原工作流 if:）
@@ -2986,15 +3083,25 @@ stage_add_bbg() {
     return 1
   fi
   echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
-  cp common/security/Kconfig /tmp/security.Kconfig.bak
+  # 备份文件用 mktemp 唯一化：固定 /tmp/security.Kconfig.bak 在并发运行时会互相覆盖，
+  # 回滚就可能把别人的备份写进本仓库的 Kconfig。
+  local _bbg_kconfig_bak
+  _bbg_kconfig_bak=$(mktemp "${TMPDIR:-/tmp}/security.Kconfig.bak.XXXXXX") \
+    || { echo "::error::无法创建 security/Kconfig 备份文件"; cd "$_pwd"; return 1; }
+  if ! cp common/security/Kconfig "$_bbg_kconfig_bak"; then
+    echo "::error::备份 common/security/Kconfig 失败"; rm -f "$_bbg_kconfig_bak"; cd "$_pwd"; return 1
+  fi
   if ! sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig; then
-    echo "::error::BBG 修改 security/Kconfig 失败，已回滚"; cp /tmp/security.Kconfig.bak common/security/Kconfig
+    echo "::error::BBG 修改 security/Kconfig 失败，已回滚"; cp "$_bbg_kconfig_bak" common/security/Kconfig
+    rm -f "$_bbg_kconfig_bak"
     return 1
   elif ! grep -q "baseband_guard" common/security/Kconfig; then
     echo "::error::BBG 未匹配到 config LSM 段：security/Kconfig 未被修改，Kconfig default 不会含 baseband_guard（已回滚）"
-    cp /tmp/security.Kconfig.bak common/security/Kconfig
+    cp "$_bbg_kconfig_bak" common/security/Kconfig
+    rm -f "$_bbg_kconfig_bak"
     return 1
   fi
+  rm -f "$_bbg_kconfig_bak"
 
   cd "$_pwd"
 }
@@ -3011,42 +3118,62 @@ run_add_bbg() {
 stage_apply_rekernel() {
   log_stage "apply_rekernel" "应用 Re-Kernel"
   local _pwd="$PWD"
+  local TMP_REKERNEL
   cd "${KERNEL_ROOT}"
-  set -e
+  # 注意：这里**不能**写 set -e。本阶段由 `if ! run_apply_rekernel` 调度，
+  # 该上下文会抑制函数体内的 errexit（写了也保护不了任何命令），却会把 -e
+  # 泄漏给父 shell。关键命令一律显式 `|| return 1`。
   echo "Integrating Re-Kernel..."
-  TMP_REKERNEL=/tmp/rekernel
-  rm -rf "$TMP_REKERNEL"
-  clone_with_retry https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL" --depth 1
+  # 临时目录唯一化：固定 /tmp/rekernel 在并发/残留场景下会撞车。
+  TMP_REKERNEL=$(mktemp -d "${TMPDIR:-/tmp}/rekernel.XXXXXX") \
+    || { echo "::error::创建 Re-Kernel 临时目录失败"; cd "$_pwd"; return 1; }
+  clone_with_retry https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL" --depth 1 \
+    || { echo "::error::克隆 Re-Kernel 失败"; rm -rf "$TMP_REKERNEL"; cd "$_pwd"; return 1; }
 
   # 同步上游拆分后的完整驱动源码
-  rm -rf common/drivers/rekernel
-  mkdir -p common/drivers/rekernel
-  cp -a "$TMP_REKERNEL/LKM-Source/." common/drivers/rekernel/
+  rm -rf common/drivers/rekernel || { echo "::error::清理 common/drivers/rekernel 失败"; rm -rf "$TMP_REKERNEL"; cd "$_pwd"; return 1; }
+  mkdir -p common/drivers/rekernel || { echo "::error::创建 common/drivers/rekernel 失败"; rm -rf "$TMP_REKERNEL"; cd "$_pwd"; return 1; }
+  if ! cp -a "$TMP_REKERNEL/LKM-Source/." common/drivers/rekernel/; then
+    echo "::error::复制 Re-Kernel 驱动源码失败"; rm -rf "$TMP_REKERNEL"; cd "$_pwd"; return 1
+  fi
+  # 源码已落地，临时目录到此为止：后续失败路径无需再清理它。
+  rm -rf "$TMP_REKERNEL" || true
 
   # 将上游外置模块配置适配为内核内置驱动
   REKERNEL_MAKEFILE="common/drivers/rekernel/Makefile"
-  sed -i 's/^obj-m := rekernel\.o$/obj-$(CONFIG_REKERNEL) += rekernel.o/' "$REKERNEL_MAKEFILE"
-  grep -qF 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' "$REKERNEL_MAKEFILE" || \
-    echo 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' >> "$REKERNEL_MAKEFILE"
-  sed -i '/^[[:space:]]*depends on MODULES[[:space:]]*$/d' common/drivers/rekernel/Kconfig
+  sed -i 's/^obj-m := rekernel\.o$/obj-$(CONFIG_REKERNEL) += rekernel.o/' "$REKERNEL_MAKEFILE" \
+    || { echo "::error::改写 $REKERNEL_MAKEFILE 的 obj-m 失败"; cd "$_pwd"; return 1; }
+  if ! grep -qF 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' "$REKERNEL_MAKEFILE"; then
+    echo 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' >> "$REKERNEL_MAKEFILE" \
+      || { echo "::error::追加 LEGACY_NETLINK ccflags 失败"; cd "$_pwd"; return 1; }
+  fi
+  sed -i '/^[[:space:]]*depends on MODULES[[:space:]]*$/d' common/drivers/rekernel/Kconfig \
+    || { echo "::error::移除 depend on MODULES 失败"; cd "$_pwd"; return 1; }
 
   # 挂载到驱动树
   if ! grep -qF 'source "drivers/rekernel/Kconfig"' common/drivers/Kconfig; then
-    sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' common/drivers/Kconfig
+    sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' common/drivers/Kconfig \
+      || { echo "::error::在 drivers/Kconfig 挂载 Re-Kernel 失败"; cd "$_pwd"; return 1; }
   fi
   if ! grep -qF 'obj-$(CONFIG_REKERNEL) += rekernel/' common/drivers/Makefile; then
-    echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> common/drivers/Makefile
+    echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> common/drivers/Makefile \
+      || { echo "::error::在 drivers/Makefile 挂载 Re-Kernel 失败"; cd "$_pwd"; return 1; }
   fi
 
   # 修正头文件包含路径（适配 in-tree 编译）
-  sed -i 's|#include <../android/binder_internal.h>|#include "../android/binder_internal.h"|g' common/drivers/rekernel/rekernel_binder.c
+  sed -i 's|#include <../android/binder_internal.h>|#include "../android/binder_internal.h"|g' common/drivers/rekernel/rekernel_binder.c \
+    || { echo "::error::修正 binder_internal.h 包含路径失败"; cd "$_pwd"; return 1; }
   # 补齐 5.10 binder_internal.h 使用 DEFINE_SHOW_ATTRIBUTE 所需的定义
-  grep -qF '#include <linux/seq_file.h>' common/drivers/rekernel/rekernel_binder.c || \
-    sed -i '/#include <linux\/kprobes.h>/a #include <linux/seq_file.h>' common/drivers/rekernel/rekernel_binder.c
+  if ! grep -qF '#include <linux/seq_file.h>' common/drivers/rekernel/rekernel_binder.c; then
+    sed -i '/#include <linux\/kprobes.h>/a #include <linux/seq_file.h>' common/drivers/rekernel/rekernel_binder.c \
+      || { echo "::error::为 rekernel_binder.c 补 seq_file.h 失败"; cd "$_pwd"; return 1; }
+  fi
 
   # 配置 defconfig（幂等）
-  grep -q '^CONFIG_REKERNEL=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL=y" >> "$DEFCONFIG"
-  grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG"
+  grep -q '^CONFIG_REKERNEL=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL=y" >> "$DEFCONFIG" \
+    || { echo "::error::写入 CONFIG_REKERNEL=y 失败"; cd "$_pwd"; return 1; }
+  grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG" \
+    || { echo "::error::写入 CONFIG_REKERNEL_NETWORK=y 失败"; cd "$_pwd"; return 1; }
 
   cd "$_pwd"
 }
@@ -3180,9 +3307,13 @@ EOF
 
   # CONFIG_KPM=y 只在变体确实提供 KPM 时才写。KPM_SUPPORTED 由 stage_add_kernelsu
   # 在源码就位后计算；不支持 KPM 的变体已在前序阶段发出警告。
+  # 变体白名单只列真正的 KPM 提供者（SukiSU 系）：stage_add_kernelsu 里
+  # KPM_SUPPORTED 的判定已把 BakaSU / Official / Next / FinaSU 一律置 0，
+  # 再在这里列出它们只会得到永远进不去的死分支，两处规则也容易再次漂移。
   if [ "${KSU_MODE}" != "禁用KSU" ] \
-     && { [ "${KSU_VARIANT}" == "SukiSU" ] || [ "${KSU_VARIANT}" == "SukiSU(40726)" ] || [ "${KSU_VARIANT}" == "SukiSU(40548)" ] || [ "${KSU_VARIANT}" == "BakaSU" ] || [ "${KSU_VARIANT}" == "Next" ]; }; then
-    if { [[ "${USE_KPM}" == enabled* ]] || [[ "${USE_KPM}" == patched* ]]; } && [ "${KPM_SUPPORTED:-1}" = "1" ]; then
+     && { [ "${KSU_VARIANT}" == "SukiSU" ] || [ "${KSU_VARIANT}" == "SukiSU(40726)" ] || [ "${KSU_VARIANT}" == "SukiSU(40548)" ]; } \
+     && [ "${KPM_SUPPORTED:-1}" = "1" ]; then
+    if [[ "${USE_KPM}" == enabled* ]] || [[ "${USE_KPM}" == patched* ]]; then
       echo "CONFIG_KPM=y" >> "$DEFCONFIG"
     fi
   fi
@@ -3225,7 +3356,13 @@ EOF
     for LSM_HOOKS_C in KernelSU/kernel/hook/lsm_hooks.c \
                        KernelSU/kernel/hook/lsm_hook.c; do
       [ -f "$LSM_HOOKS_C" ] || continue
-      grep -q 'KSU_LSM_ARG' "$LSM_HOOKS_C" && continue
+      # 已经带 ksu_lsm_id 就说明 sukisu_compat 补丁先一步处理过了（它会插一份
+      # static struct lsm_id，并把 6.8+ 分支改成传 &ksu_lsm_id）；此时再插一份
+      # const 版本就是重定义（android16-6.12 报的 struct lsm_id vs const struct
+      # lsm_id 正是这么来的）。所以两种写法都要算“已处理”。
+      if grep -q 'KSU_LSM_ARG' "$LSM_HOOKS_C" || grep -q 'ksu_lsm_id' "$LSM_HOOKS_C"; then
+        continue
+      fi
       grep -q 'ARRAY_SIZE(ksu_hooks), "ksu"' "$LSM_HOOKS_C" || continue
       perl -0pi -e 's{security_add_hooks\(ksu_hooks,\s*ARRAY_SIZE\(ksu_hooks\),\s*"ksu"\)}{security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), KSU_LSM_ARG)}g' "$LSM_HOOKS_C"
       # 补上宏/变量定义本体。用 python 而不是 perl：早先这里用 perl -0pi 插块，
@@ -3269,7 +3406,10 @@ block = (
 with io.open(path, "w", encoding="utf-8", newline="") as f:
     f.write(src[: m.start()] + block + src[m.start():])
 PY
-      [ $? -eq 0 ] || echo "::error::为 ${LSM_HOOKS_C} 补充 security_add_hooks 宏定义失败"
+      if [ $? -ne 0 ]; then
+        echo "::error::为 ${LSM_HOOKS_C} 补充 security_add_hooks 宏定义失败（锚点 ksu_hooks 数组未找到，6.10+ 会编译期报类型不匹配）"
+        return 1
+      fi
       echo "已修复 6.10+ 的 security_add_hooks 签名：${LSM_HOOKS_C}"
     done
   fi
@@ -3324,7 +3464,6 @@ run_config_kernel() { stage_config_kernel "$@"; }
 
 stage_config_susfs() {
   log_stage "config_susfs" "添加 SUSFS 配置"
-  local _pwd="$PWD"
   LINES_BEFORE=$(wc -l < "$DEFCONFIG")
   printf '%s\n' "${SUSFS_CONFIG_OPTIONS[@]}" >> "$DEFCONFIG"
 
@@ -3334,7 +3473,6 @@ stage_config_susfs() {
     echo "已导出 SUSFS 配置片段: $(wc -l < "$WORKSPACE/susfs-patch/susfs.config") 行"
   fi
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -3411,10 +3549,12 @@ run_config_kernel_name() { stage_config_kernel_name "$@"; }
 
 stage_set_build_time() {
   log_stage "set_build_time" "设置自定义构建时间"
-  local _pwd="$PWD"
   # 原函数内 `set -euo pipefail` 的 -u 会泄漏到后续所有阶段
   # （函数不创建子 shell），导致任一未绑定变量在编译后阶段莫名失败。
   # 改为与脚本顶层一致的 -eo pipefail，去掉 -u。
+  # 同类泄漏全仓已清理：stage_inject_ntsync / stage_apply_rekernel 里原先的裸
+  # `set -e` 也一并删除（那些阶段由 `if ! run_xxx` 调度，errexit 既不生效
+  # 又会泄漏给父 shell），函数内一律不再设置全局 errexit。
   set -eo pipefail
 
   local input_time="${BUILD_TIME:-}"
@@ -3456,13 +3596,11 @@ stage_set_build_time() {
   fi
 fi
 
-  cd "$_pwd"
 }
 
 run_set_build_time() { stage_set_build_time "$@"; }
 
 compile_kernel_once() {
-  local _pwd="$PWD"
   LOG_DIR="$WORKSPACE/build-logs"
   ATTEMPT_FILE="$LOG_DIR/.compile-attempt"
   mkdir -p "$LOG_DIR"
@@ -3551,8 +3689,6 @@ compile_kernel_once() {
     echo "退出码: $BUILD_STATUS"
   } >> "$LOG_FILE"
   exit "$BUILD_STATUS"
-
-  cd "$_pwd"
 }
 
 stage_compile_kernel() {
@@ -3687,6 +3823,10 @@ stage_verify_config_landing() {
     echo "::error title=功能落盘校验失败::${#fails[@]} 项请求的功能未落进生成的 .config，不会编进内核"
     printf '  - %s\n' "${fails[@]}"
     echo "::error::此处中断，不产出「声称启用、实际没有」的可刷产物"
+    # 现场诊断：区分「符号被 Kconfig 丢弃」与「choice 选了别的成员」两种成因——
+    # 前者在 .config 里连影子都没有，后者会看到另一个 ZRAM_DEF_COMP_* 成员 =y。
+    echo "::error::诊断：$found 里 ZRAM/ZSMALLOC 相关的行如下（最多 40 行）"
+    grep -nE 'ZRAM|ZSMALLOC' "$found" | head -n 40 || true
     return 1
   fi
   echo "功能落盘校验通过：生成的 .config 已认领全部 ${#expect[@]} 项请求"
@@ -3696,7 +3836,6 @@ run_verify_config_landing() { stage_verify_config_landing "$@"; }
 
 stage_collect_fail_log() {
   log_stage "collect_fail_log" "整理编译失败日志"
-  local _pwd="$PWD"
   LOG_DIR="$WORKSPACE/build-logs"
   mkdir -p "$LOG_DIR"
 
@@ -3719,7 +3858,6 @@ stage_collect_fail_log() {
   df -h "$WORKSPACE" > "$LOG_DIR/disk-usage.txt" 2>&1 || true
   ccache -s > "$LOG_DIR/ccache-stats.txt" 2>&1 || true
 
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -4046,7 +4184,6 @@ anykernel3_zip_name() {
 
 stage_prepare_boot() {
   log_stage "prepare_boot" "准备 Boot 镜像"
-  local _pwd="$PWD"
   mkdir -p bootimgs
 
   if [ "${ANDROID_VERSION}" == "android12" ] || [ "${ANDROID_VERSION}" == "android13" ]; then
@@ -4092,7 +4229,6 @@ stage_prepare_boot() {
     rm -f ./Image.lz4 ./bootimgs/Image.lz4
   fi
 
-  cd "$_pwd"
 }
 
 run_prepare_boot() { stage_prepare_boot "$@"; }
@@ -4102,9 +4238,12 @@ stage_make_anykernel3() {
   local _pwd="$PWD"
   cd "$ANYKERNEL3"
   ZIP_NAME="$(anykernel3_zip_name)"
-  mv ../Image ./Image
+  [ -s ../Image ] || { echo "::error::Image 缺失或为空，无法打包 AnyKernel3"; cd "$_pwd"; return 1; }
+  mv ../Image ./Image \
+    || { echo "::error::移动 Image 到 AnyKernel3 目录失败"; cd "$_pwd"; return 1; }
   # B-4：用 . 而非 ./*，否则以 . 开头的隐藏条目会被通配符漏掉；顺带排除 .git*
-  zip -r "../$ZIP_NAME" . -x '*.git*'
+  zip -r "../$ZIP_NAME" . -x '*.git*' \
+    || { echo "::error::AnyKernel3 zip 打包失败"; cd "$_pwd"; return 1; }
 
   cd "$_pwd"
 }
@@ -4120,24 +4259,25 @@ run_make_anykernel3() {
 
 stage_prepare_anykernel3() {
   log_stage "prepare_anykernel3" "准备 AnyKernel3 目录"
-  local _pwd="$PWD"
-  mv ./Image "$ANYKERNEL3/Image"
+  [ -s ./Image ] || { echo "::error::Image 缺失或为空，无法打包 AnyKernel3"; return 1; }
+  mv ./Image "$ANYKERNEL3/Image" \
+    || { echo "::error::移动 Image 到 AnyKernel3 目录失败"; return 1; }
 
   # make_anykernel3 只在「上传全部」模式下执行，而本阶段只在非「上传全部」
   # 模式下执行，两者条件互斥 —— 非「上传全部」时 Image 被搬进 AnyKernel3 目录
   # 却没有任何一步打包，结果是一个刷机包都不产出。这里补上打包。
   local _zip
   _zip="$(anykernel3_zip_name)"
+  [ -s "$ANYKERNEL3/Image" ] \
+    || { echo "::error::$ANYKERNEL3/Image 缺失或为空，拒绝打出无 Image 的刷机包"; return 1; }
   # B-4：用 . 而非 ./*，否则以 . 开头的隐藏条目会被通配符漏掉；顺带排除 .git*
-  ( cd "$ANYKERNEL3" && zip -r "../$_zip" . -x '*.git*' )
+  ( cd "$ANYKERNEL3" && zip -r "../$_zip" . -x '*.git*' ) \
+    || { echo "::error::AnyKernel3 zip 打包失败"; return 1; }
   if [ ! -s "$_zip" ]; then
     echo "::error::AnyKernel3 刷机包生成失败或为空: $_zip"
-    cd "$_pwd"
     return 1
   fi
   echo "已生成 AnyKernel3 刷机包: $_zip"
-
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）
@@ -4163,24 +4303,42 @@ stage_build_boot_a12() {
     curl -Lo gki-kernel.zip "$FALLBACK_URL"
   fi
 
-  unzip gki-kernel.zip && rm gki-kernel.zip
-  $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
+  # 本阶段由 `if ! run_build_boot_a12` 调度，errexit 被抑制：下面这些命令
+  # 原本无人检查退出码，unzip 解到半截 / unpack_bootimg 失败 / mkbootimg 写一半
+  # 都会继续往下 cp 成正式产物（残缺 boot.img 也能刷，直接变砖）。
+  unzip -o gki-kernel.zip \
+    || { echo "::error::GKI zip 解压失败（可能是错误页或半截包）"; cd "$_pwd"; return 1; }
+  rm -f gki-kernel.zip
+  $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img" \
+    || { echo "::error::unpack_bootimg 解包 boot-5.10.img 失败"; cd "$_pwd"; return 1; }
 
   gzip -n -k -f -9 ./Image
   [ -s ./Image.gz ] || { echo "::error::Image.gz 生成失败或为空"; return 1; }
 
-  $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}"
-  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-  cp ./boot.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot.img
+  $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}" \
+    || { echo "::error::mkbootimg 生成 boot.img 失败"; cd "$_pwd"; return 1; }
+  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+    || { echo "::error::avbtool 为 boot.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+  [ -s ./boot.img ] || { echo "::error::boot.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+  cp ./boot.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot.img \
+    || { echo "::error::拷出 boot.img 失败"; cd "$_pwd"; return 1; }
 
-  $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}"
-  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-  cp ./boot-gz.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-gz.img
+  $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}" \
+    || { echo "::error::mkbootimg 生成 boot-gz.img 失败"; cd "$_pwd"; return 1; }
+  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+    || { echo "::error::avbtool 为 boot-gz.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+  [ -s ./boot-gz.img ] || { echo "::error::boot-gz.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+  cp ./boot-gz.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-gz.img \
+    || { echo "::error::拷出 boot-gz.img 失败"; cd "$_pwd"; return 1; }
 
   if [ "${LZ4_KERNEL_READY:-0}" = "1" ] && [ -s ./Image.lz4 ]; then
-    $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}"
-    $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-    cp ./boot-lz4.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-lz4.img
+    $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${OS_PATCH_LEVEL}" \
+      || { echo "::error::mkbootimg 生成 boot-lz4.img 失败"; cd "$_pwd"; return 1; }
+    $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+      || { echo "::error::avbtool 为 boot-lz4.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+    [ -s ./boot-lz4.img ] || { echo "::error::boot-lz4.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+    cp ./boot-lz4.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-lz4.img \
+      || { echo "::error::拷出 boot-lz4.img 失败"; cd "$_pwd"; return 1; }
   else
     echo "::warning::跳过 boot-lz4.img（Image.lz4 未就绪）"
   fi
@@ -4206,18 +4364,32 @@ stage_build_boot_a13plus() {
   gzip -n -k -f -9 ./Image
   [ -s ./Image.gz ] || { echo "::error::Image.gz 生成失败或为空"; return 1; }
 
-  $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
-  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-  cp ./boot.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot.img
+  # 同 stage_build_boot_a12：本阶段在 `if ! run_...` 上下文里跑，
+  # mkbootimg / avbtool / cp 的失败必须显式上抛，否则会把残缺镜像当正式产物。
+  $MKBOOTIMG --header_version 4 --kernel Image --output boot.img \
+    || { echo "::error::mkbootimg 生成 boot.img 失败"; cd "$_pwd"; return 1; }
+  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+    || { echo "::error::avbtool 为 boot.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+  [ -s ./boot.img ] || { echo "::error::boot.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+  cp ./boot.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot.img \
+    || { echo "::error::拷出 boot.img 失败"; cd "$_pwd"; return 1; }
 
-  $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
-  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-  cp ./boot-gz.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-gz.img
+  $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img \
+    || { echo "::error::mkbootimg 生成 boot-gz.img 失败"; cd "$_pwd"; return 1; }
+  $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+    || { echo "::error::avbtool 为 boot-gz.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+  [ -s ./boot-gz.img ] || { echo "::error::boot-gz.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+  cp ./boot-gz.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-gz.img \
+    || { echo "::error::拷出 boot-gz.img 失败"; cd "$_pwd"; return 1; }
 
   if [ "${LZ4_KERNEL_READY:-0}" = "1" ] && [ -s ./Image.lz4 ]; then
-    $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
-    $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-    cp ./boot-lz4.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-lz4.img
+    $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img \
+      || { echo "::error::mkbootimg 生成 boot-lz4.img 失败"; cd "$_pwd"; return 1; }
+    $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH \
+      || { echo "::error::avbtool 为 boot-lz4.img 添加 footer 失败"; cd "$_pwd"; return 1; }
+    [ -s ./boot-lz4.img ] || { echo "::error::boot-lz4.img 为空，拒绝拷贝为正式产物"; cd "$_pwd"; return 1; }
+    cp ./boot-lz4.img ../${ANDROID_VERSION}-${KERNEL_VERSION}.${NAME_SUBLEVEL}-${OS_PATCH_LEVEL}-boot-lz4.img \
+      || { echo "::error::拷出 boot-lz4.img 失败"; cd "$_pwd"; return 1; }
   else
     echo "::warning::跳过 boot-lz4.img（Image.lz4 未就绪）"
   fi
@@ -4237,7 +4409,6 @@ run_build_boot_a13plus() {
 
 stage_collect_conflicts() {
   log_stage "collect_conflicts" "收集补丁冲突文件"
-  local _pwd="$PWD"
   REJECTS_DIR="$WORKSPACE/patch-rejects"
   mkdir -p "$REJECTS_DIR"
 
@@ -4270,7 +4441,6 @@ stage_collect_conflicts() {
     done
   fi
 
-  cd "$_pwd"
 }
 
 run_collect_conflicts() { stage_collect_conflicts "$@"; }

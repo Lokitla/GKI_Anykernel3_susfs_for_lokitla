@@ -35,6 +35,24 @@ UPSTREAM_PATCH="$SUSFS4KSU/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
 [ -f "$UPSTREAM_PATCH" ] || { echo "::error::未找到 susfs4ksu KSU 侧补丁: $UPSTREAM_PATCH" >&2; exit 1; }
 [ -d "$KERNEL_ROOT/$KSU_DIR/.git" ] || { echo "::error::$KSU_DIR 不是 git 仓库检出，无法应用补丁" >&2; exit 1; }
 
+# ---- 共用助手 ----
+# 审计 P2：原来这里有两份一模一样的「补 #include "linux/jump_label.h"」实现
+# （ksud_integration.c 的 static key 补回块里一份、紧随其后的「定义存在但 include
+# 缺失」块里一份），改一处漏一处就会让两处行为分叉。收敛成一个函数。
+#
+# ksu_ensure_jump_label_include <file>
+#   已含该 include → 返回 0 且不写盘；
+#   缺 include 但文件里没有 `#include <linux/rcupdate.h>` 锚点 → 返回 1 且不写盘
+#   （调用方各自决定是告警放行还是硬失败）；
+#   其余情况插入该 include 并回读断言，成功 0 / 失败 1。
+ksu_ensure_jump_label_include() {
+  local _f="$1"
+  grep -q '#include "linux/jump_label.h"' "$_f" && return 0
+  grep -q '^#include <linux/rcupdate.h>$' "$_f" || return 1
+  sed -i 's|^#include <linux/rcupdate.h>$|#include <linux/rcupdate.h>\n#include "linux/jump_label.h"|' "$_f"
+  grep -q '#include "linux/jump_label.h"' "$_f"
+}
+
 echo "步骤 1/2: 应用 susfs4ksu 10_enable_susfs_for_ksu.patch（patch --forward，允许部分失败）..."
 cp "$UPSTREAM_PATCH" "$KERNEL_ROOT/$KSU_DIR/10_enable_susfs_for_ksu.patch"
 # patch --forward 的退出码：0=全部应用；1=部分 hunk 被跳过/已应用过；>=2=真失败。
@@ -48,10 +66,27 @@ if [ "$_patch_rc" -ge 2 ]; then
   exit 1
 fi
 _rej=$(find "$KERNEL_ROOT/$KSU_DIR" -name "*.rej" -type f 2>/dev/null | wc -l)
+if [ "${_rej:-0}" -ne 0 ]; then
+  # 上层注释（38-42 行）写着「允许部分 hunk 失败，但必须有可追溯证据」。此前这里
+  # 只把数字打进 echo，既不是合规的失败信号也不是告警：日志里一句话，构建不红、
+  # 也不进 GitHub 注解。改为显式 ::warning + 列出前 10 个 .rej 路径，让结构漂移
+  # 在构建页面上可见；真正的 fail-closed 仍由下方的内联修复逐项断言与文件末尾的
+  # 结果校验兜住（那里少一个符号就直接 exit 1）。
+  echo "::warning::FinaSU 上游补丁残留 ${_rej} 个 .rej（patch 退出码 ${_patch_rc}），转入内联修复；若末尾断言失败，说明这些 hunk 未能被内联修复覆盖"
+  find "$KERNEL_ROOT/$KSU_DIR" -name "*.rej" -type f 2>/dev/null | head -n 10 | while IFS= read -r _r; do
+    echo "  .rej: ${_r#"$KERNEL_ROOT/$KSU_DIR"/}"
+  done
+fi
 echo "FinaSU: 上游补丁部分应用（patch 退出码 ${_patch_rc}，残留 ${_rej} 个 .rej），转入内联修复"
 rm -f "$KERNEL_ROOT/$KSU_DIR/10_enable_susfs_for_ksu.patch"
 
 echo "步骤 2/2: FinaSU 内联适配修复..."
+# 关于下面这个 if（审计 P2「恒真条件」）：KSU_VARIANT 已在本文件 32 行硬编码为
+# "FinaSU"，所以条件恒真，不是分支而是一个恒成立的块。保留它而不是去掉，是因为
+# 去掉必须把整段约 440 行一起减两格缩进，那是一次纯空白的大 diff，与「改动最小、
+# 不重排」的约定冲突；而变体守卫的真正位置在调用方
+# （scripts/build_kernel.sh:2043 的 `if [ "$KSU_VARIANT" = "FinaSU" ]`），本脚本
+# 也不会被其它变体调用。若将来要服务多变体，把这里的条件换成真实判据即可。
 if [ "$KSU_VARIANT" == "FinaSU" ]; then
   FINASU_KSU="$KERNEL_ROOT/KernelSU/kernel"
   FINASU_INIT="$FINASU_KSU/core/init.c"
@@ -90,6 +125,35 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
     exit 1
   fi
 
+  # 0i) 上游 10_enable_susfs_for_ksu.patch 的 preinit.c hunk 把 FinaSU 原本的
+  #     ksu_close_fd(fd) 改写成了 close_fd(fd)（该补丁里唯一一处 +close_fd）。
+  #     close_fd(unsigned int fd) 是 5.15 之后才有的内核 API：android12-5.10 的
+  #     include/linux/fdtable.h 只有 __close_fd(struct files_struct *, unsigned int)，
+  #     于是 5.10 上必然报
+  #       preinit.c:126:9: error: implicit declaration of function 'close_fd'
+  #       [-Werror,-Wimplicit-function-declaration]
+  #     同一条补丁在 5.15/6.1/6.6/6.12 上不会暴露，属上游补丁对旧内核的兼容缺陷。
+  #     FinaSU 原本的写法 ksu_close_fd() 是 util.h 里的宏（ksyscall(close, fd)，
+  #     走 ksu syscall 表，与内核版本无关），这里把改写点改回它，并 fail-closed 断言。
+  FINASU_PREINIT="$FINASU_KSU/preinit/preinit.c"
+  if [ -f "$FINASU_PREINIT" ] && grep -qE '(^|[^_[:alnum:]])close_fd\(' "$FINASU_PREINIT"; then
+    if ! grep -q '#include "util.h"' "$FINASU_PREINIT"; then
+      echo '::error::FinaSU preinit.c 使用 ksu_close_fd 但缺少 util.h 头文件' >&2
+      exit 1
+    fi
+    # 只匹配裸 close_fd(，跳过 ksu_close_fd( 与 __close_fd(
+    sed -i -E 's/(^|[^_[:alnum:]])close_fd\(/\1ksu_close_fd(/g' "$FINASU_PREINIT"
+    if grep -qE '(^|[^_[:alnum:]])close_fd\(' "$FINASU_PREINIT"; then
+      echo '::error::FinaSU preinit.c 仍有裸 close_fd() 调用（5.10 无该 API，结构可能已变化）' >&2
+      exit 1
+    fi
+    grep -q 'ksu_close_fd(' "$FINASU_PREINIT" || {
+      echo '::error::FinaSU preinit.c 改写后未出现 ksu_close_fd()' >&2
+      exit 1
+    }
+    echo 'FinaSU preinit.c: close_fd() 已改回 ksu_close_fd()（5.10 没有 close_fd API）'
+  fi
+
   # 0b) SUSFS 内核补丁在 security/selinux/*.c 中以 extern 引用了这些符号，需与 BakaSU 一致
   #     改为全局定义，否则 ThinLTO 链接阶段会报 undefined symbol。
   #     - 6 个通用符号（>=5.10 用到）：
@@ -99,6 +163,10 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
   #       5.15/6.1 用不到，所以之前只在 6.6 上暴露为链接失败）：
   #       security_context_to_sid_with_policy / security_sid_to_context_with_policy /
   #       security_compute_av_user_with_policy
+  #     - 3 个函数（SUSFS gen3 接管式主补丁在 security/selinux/{selinuxfs,hooks}.c 里
+  #       extern 引用；上游 10_enable_susfs_for_ksu.patch 的去 static hunk 在本树失配，
+  #       导致 5.10 链接期 undefined symbol: my_write_context/my_write_access/my_setprocattr）：
+  #       my_write_context / my_write_access / my_setprocattr
   FINASU_SELINUX_HIDE="$FINASU_KSU/feature/selinux_hide.c"
   if grep -q '^static bool ksu_selinux_hide_enabled ' "$FINASU_SELINUX_HIDE"; then
     sed -i \
@@ -112,6 +180,10 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
       -e 's|^static int security_sid_to_context_with_policy|int security_sid_to_context_with_policy|' \
       -e 's|^static void security_compute_av_user_with_policy|void security_compute_av_user_with_policy|' \
       -e 's|^static void __nocfi security_compute_av_user_with_policy|void __nocfi security_compute_av_user_with_policy|' \
+      -e 's|^static ssize_t my_write_context|ssize_t my_write_context|' \
+      -e 's|^static ssize_t my_write_access|ssize_t my_write_access|' \
+      -e 's|^static int my_setprocattr|int my_setprocattr|' \
+      -e 's|^static int __nocfi my_setprocattr|int __nocfi my_setprocattr|' \
       "$FINASU_SELINUX_HIDE"
   fi
 
@@ -368,6 +440,12 @@ PYEOF
   # 0g) SUSFS 补丁在 ksud_integration.c 的 4 个 static key 定义 hunk 因结构漂移失败，
   #     但后续 hunk 已把这些 key 改为按引用使用（原 hook stop 逻辑）→ 未定义引用。
   #     按被拒 hunk 1 的原意补回定义（含 linux/jump_label.h）。
+  #
+  # 审计 P2 指出此块与紧随其后的「定义存在但 include 缺失」块重复实现了补
+  # `#include "linux/jump_label.h"` 这一步，已抽成文件头的共用助手
+  # ksu_ensure_jump_label_include()（定义在 36 行之后），两处统一调用。
+  # DEFINE_STATIC_KEY_TRUE 的插入只在下面这一处（python 按"// clang-format off"
+  # 锚点插），另一块不含该逻辑，因此没有第二份可合并。
   if [ -f "$FINASU_KSI" ]; then
     NEED_KEYS=""
     for KEY in ksu_is_init_rc_hook_enabled ksu_is_input_hook_enabled is_init_second_stage_not_executed is_first_zygote; do
@@ -378,9 +456,8 @@ PYEOF
       fi
     done
     if [ -n "$NEED_KEYS" ]; then
-      if ! grep -q '#include "linux/jump_label.h"' "$FINASU_KSI"; then
-        sed -i 's|^#include <linux/rcupdate.h>$|#include <linux/rcupdate.h>\n#include "linux/jump_label.h"|' "$FINASU_KSI"
-      fi
+      # 锚点不存在时与原来一致：不写盘、继续走下面的 python 补定义（保持原行为）
+      ksu_ensure_jump_label_include "$FINASU_KSI" || true
       python3 - "$FINASU_KSI" <<'PYEOF'
 import sys
 
@@ -399,11 +476,11 @@ if defs:
     print("ksud_integration.c: 已补回 %d 个 static key 定义" % len(defs.splitlines()))
 PYEOF
     fi
-    # 跳转标签定义存在但头文件缺失时（上游补丁自带的定义 hunk 不带 include）也补上
+    # 跳转标签定义存在但头文件缺失时（上游补丁自带的定义 hunk 不带 include）也补上。
+    # 锚点缺失的判定已收进助手（返回 1 → 这里保持原来的「不写盘」行为）。
     if grep -q 'DEFINE_STATIC_KEY_TRUE' "$FINASU_KSI" \
-      && ! grep -q 'jump_label' "$FINASU_KSI" \
-      && grep -q '^#include <linux/rcupdate.h>$' "$FINASU_KSI"; then
-      sed -i 's|^#include <linux/rcupdate.h>$|#include <linux/rcupdate.h>\n#include "linux/jump_label.h"|' "$FINASU_KSI"
+      && ! grep -q 'jump_label' "$FINASU_KSI"; then
+      ksu_ensure_jump_label_include "$FINASU_KSI" || true
       grep -n 'jump_label' "$FINASU_KSI" | head -1
     fi
     for KEY in ksu_is_init_rc_hook_enabled ksu_is_input_hook_enabled is_init_second_stage_not_executed is_first_zygote; do
@@ -481,12 +558,19 @@ KSU_KBUILD_EOF
     || ! grep -q '^int security_context_to_sid_with_policy' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^int security_sid_to_context_with_policy' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^void security_compute_av_user_with_policy' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^ssize_t my_write_context' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^ssize_t my_write_access' "$FINASU_SELINUX_HIDE" \
+    || ! grep -qE '^int (__nocfi )?my_setprocattr\(const char' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^int ksu_handle_execveat_ksud(int \*fd, struct filename \*\*filename_ptr,' "$FINASU_KSI"; then
     echo "::error::FinaSU 适配修复失败，代码结构可能已变化" >&2
     exit 1
   fi
   if grep -qE '^static (int|void) (__nocfi )?security_(context_to_sid_with_policy|sid_to_context_with_policy|compute_av_user_with_policy)' "$FINASU_SELINUX_HIDE"; then
     echo "::error::FinaSU selinux_hide.c 的 security_*_with_policy 仍未全局化（6.6 会链接失败）" >&2
+    exit 1
+  fi
+  if grep -qE '^static (ssize_t|int) (__nocfi )?(my_write_context|my_write_access|my_setprocattr)' "$FINASU_SELINUX_HIDE"; then
+    echo "::error::FinaSU selinux_hide.c 的 my_write_context/my_write_access/my_setprocattr 仍未全局化（SUSFS 接管式主补丁链接失败）" >&2
     exit 1
   fi
   if grep -qE 'ksu_syscall_hook_init\(\)|ksu_syscall_hook_manager_(init|exit)\(\)' "$FINASU_INIT"; then

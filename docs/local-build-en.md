@@ -65,12 +65,14 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 
 | Option | Description |
 |---|---|
-| `--ksu-variant` | KernelSU variant, default `BakaSU`: `SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `Official` / `Next` |
+| `--ksu-variant` | KernelSU variant, default `BakaSU`: `SukiSU` / `SukiSU(40726)` / `SukiSU(40548)` / `BakaSU` / `FinaSU` / `Official` / `Next` |
 | `--ksu-branch-mode` | SukiSU branch to pull (SukiSU only): `auto`=follow the SUSFS toggle (default), `main`=manager branch, `builtin`=in-kernel implementation |
 | `--no-susfs` | Disable SUSFS (enabled by default) |
 | `--version` | Custom version name |
 | `--build-time` | Custom build time (pins the kernel `UTS_VERSION` timestamp) |
 | `--export-susfs-patches` | Export the SUSFS integration patch |
+| `--sukisu-commit` | SukiSU commit hash; the kernel and the manager both use this commit (SukiSU variants only; blank = `sukisu=` in `config/config`, or the branch head) |
+| `--susfs-commit` | SUSFS commit hash used for the in-kernel SUSFS patching (blank = the matching branch line in `config/config`, or the branch head) |
 
 ### Feature switches
 
@@ -87,14 +89,14 @@ python3 build.py --android android14 --kernel 6.1 --dry-run
 | `--nomount` | Enable the NoMount mount meta-module; the matching NoMount module must be flashed separately |
 | `--op8e` | Enable OnePlus 8E support (do not enable on other devices) |
 | `--cve-patch` | Apply the CVE-2026-43499 (GhostLock) fix chain |
-| `--droidspaces` | Droidspaces container support (`disabled` / `678` / `123` / `345`), experimental |
+| `--droidspaces` | Droidspaces container support (`不启用` [disabled] / `678` / `123` / `345`), experimental |
 | `--ntsync` | Enable NTSync (requires Droidspaces) |
 
 ### Artifacts and debugging
 
 | Option | Description |
 |---|---|
-| `--artifact-mode` | `upload all` (default) / `AnyKernel3 only` |
+| `--artifact-mode` | `上传全部` [upload all] (default) / `仅 AnyKernel3` [AnyKernel3 only] |
 | `--only <phase>` | Run a single phase (debugging) |
 | `--from <phase>` | Resume from a phase |
 | `--list-phases` | List all build phases |
@@ -126,10 +128,16 @@ Common phase names: `sync_kernel_source`, `add_kernelsu`, `apply_susfs`, `config
 
 - **"Clean disk space" runs only on GitHub Actions runners**; local builds skip it so nothing on
   your machine is deleted by accident.
-- `--kpm` is force-disabled by the script on kernels ≥ 6.10 (`KPM_SUPPORTED=0`: the KPM
-  code uses `netlink_kernel_cfg.cb_mutex`, removed in newer kernels). **6.6 and below ARE
-  supported** — earlier docs had this boundary backwards.
-- Defaults match Actions: ZRAM is **on**, every other optional feature is off.
+- Whether `--kpm` actually works is decided by three conditions, narrower than a version number:
+  1. **The variant must provide KPM** — only the SukiSU family (including `SukiSU(40726)` /
+     `SukiSU(40548)`); BakaSU / FinaSU / Official / Next ship no `config KPM`, so the request is skipped.
+  2. **Kernel ≤ 6.6** — on 6.10+ it is force-disabled (`KPM_SUPPORTED=0`: the KPM code uses
+     `netlink_kernel_cfg.cb_mutex`, removed in newer kernels).
+  3. **Kernel ≠ 6.6** — 6.6 is a special case: the script still writes `CONFIG_KPM=y` but **skips
+     the Image patching** (log: "6.6 内核不支持 KPM 镜像修补"), so the module cannot load.
+
+  Net: the only combination that currently loads KPM is **SukiSU family + kernel ≤ 6.1**.
+- Defaults follow the **entry workflow's `inputs`**, and they differ per entry: `kernel-custom.yml` / `kernel-a12`–`a15` default `use_zram` on, while `kernel-a16-6-12.yml` defaults it off; `use_kpm` defaults to `patched` in most entries. On the CLI, `build.py`'s own defaults apply when a flag is omitted.
 
 ---
 

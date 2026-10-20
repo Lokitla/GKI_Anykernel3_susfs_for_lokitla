@@ -22,11 +22,11 @@ name: 自用构建-5.10.236（BakaSU / marble）
 #
 # 三项开关在 scripts/build_kernel.sh 里都是纯布尔量、没有变体门控，
 # BakaSU 下会真实参与构建，不存在"写了但被跳过"的情况：
-#   use_rekernel     -> stage_apply_rekernel（build_kernel.sh:2187）
-#   use_net_enhance  -> stage_config_net_enhance（build_kernel.sh:2194）
+#   use_rekernel     -> stage_apply_rekernel
+#   use_net_enhance  -> stage_config_net_enhance
 #                       内含写后校验：DEFAULT_BBR / IP_SET / NET_SCH_FQ 等
 #                       任一符号未落盘会直接失败，不会静默降级
-#   use_nomount      -> stage_integrate_nomount（build_kernel.sh:1579）
+#   use_nomount      -> stage_integrate_nomount
 #                       从 maxsteeel/nomount 的 dev 分支拉 setup.sh，
 #                       收尾校验 fs/nomount 软链接存在
 # 若首次实机构建遇到某一项报不兼容、又不想让整轮白跑，把
@@ -41,7 +41,7 @@ name: 自用构建-5.10.236（BakaSU / marble）
 #
 # 不发 Release（这是刻意的设计，不是遗漏）：
 #   Release 由 main.yml 编排层的 gh release create/upload 负责
-#   （main.yml:973-1022）。本 workflow 直接 uses: build.yml ——
+#   （main.yml 的 Release 步骤）。本 workflow 直接 uses: build.yml ——
 #   build.yml 内部只有 actions/upload-artifact，没有任何 release 步骤，
 #   因此产物只留在 Actions artifacts 里，不会生成 Release。
 #

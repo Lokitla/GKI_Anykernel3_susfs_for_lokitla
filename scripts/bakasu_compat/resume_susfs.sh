@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 # 用途：解除上游 BakaSU 在 kernel/tools/susfs_compat.mk 末尾追加的**无条件**
 #       $(error Please wait susfs update.)，把它换成「按内核版本 + 树内实际形态」
 #       的精确门控。不钉上游 commit：上游解除挂起后本脚本自动 no-op。
@@ -19,6 +20,11 @@
 # 判定规则（与上游该文件自己列出的 selinux_hide/SUSFS 符号同源）：
 #   <  6.6：hooks.c 无 ksu_selinux_hide_running（走 KernelSU 自动钩子）→ 放行；
 #           有手动钩子但缺 should_check_current（旧 SUSFS）→ 阻断；
+#   接管式新模型（SUSFS 把 selinux 钩子交给 KernelSU，树内引用 my_setprocattr /
+#           my_write_context / my_write_access）：要求 KernelSU 侧以非 static 符号
+#           导出，否则阻断——这种形态既没有 should_check_current 也没有
+#           backup_sepolicy，必须先单独判定，不能被「旧 SUSFS」分支误判成
+#           「隐藏可被检测」；
 #   >= 6.6：selinuxfs.c 既无 security_context_to_sid_with_policy 也无
 #           backup_sepolicy（本仓库新模型适配后的形态）→ 阻断。
 #   无法判定（缺少 hooks.c / 版本未知 / 上游文件形态变了）→ 一律阻断（fail-closed）。
@@ -80,6 +86,16 @@ find_in_tree() {
 HOOKS_C="$(find_in_tree security/selinux/hooks.c || true)"
 SELINUXFS_C="$(find_in_tree security/selinux/selinuxfs.c || true)"
 
+# KernelSU 侧 selinux_hide 实现（接管式新模型要求它导出 my_* 符号）。
+KSU_HIDE_C=""
+for cand in "$KERNEL_ROOT/$KSU_DIR/kernel/feature/selinux_hide.c" \
+            "$KERNEL_ROOT/common/$KSU_DIR/kernel/feature/selinux_hide.c"; do
+  if [ -f "$cand" ]; then KSU_HIDE_C="$cand"; break; fi
+done
+if [ -z "$KSU_HIDE_C" ]; then
+  KSU_HIDE_C="$(find "$KERNEL_ROOT" -maxdepth 6 -type f -path "*/kernel/feature/selinux_hide.c" -print 2>/dev/null | head -n1 || true)"
+fi
+
 # ---- 版本判定（< 6.6 ?） ----------------------------------------------------
 kv_major="${KERNEL_VERSION%%.*}"
 kv_rest="${KERNEL_VERSION#*.}"
@@ -108,7 +124,31 @@ if [ "$LT66" = "unknown" ]; then
 elif [ -z "$HOOKS_C" ]; then
   BLOCK_REASON="未找到 security/selinux/hooks.c（已试 ${KERNEL_ROOT}/common 与 ${KERNEL_ROOT}），无法证明 SUSFS 的 selinux_hide 形态"
 elif [ "$LT66" = "yes" ]; then
-  if grep -q "ksu_selinux_hide_running" "$HOOKS_C"; then
+  TAKEOVER_SYMS=""
+  for _sym in my_setprocattr my_write_context my_write_access; do
+    if { [ -n "$HOOKS_C" ] && grep -q "\b${_sym}\b" "$HOOKS_C"; } \
+       || { [ -n "$SELINUXFS_C" ] && grep -q "\b${_sym}\b" "$SELINUXFS_C"; }; then
+      TAKEOVER_SYMS="$TAKEOVER_SYMS ${_sym}"
+    fi
+  done
+  if [ -n "$TAKEOVER_SYMS" ]; then
+    # 接管式新模型：新版 SUSFS 补丁不再引用 fake_state，而是把 selinux 钩子整个交给
+    # KernelSU 实现，由后者以**非 static** 符号导出。BakaSU 把 my_write_* 定义成
+    # static 且整体放在 #ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 里（SUSFS
+    # 打完补丁该宏必然被定义），my_setprocattr 只有同名局部变量。
+    MISSING_SYMS=""
+    for _sym in $TAKEOVER_SYMS; do
+      if [ -z "$KSU_HIDE_C" ] \
+         || ! grep -Eq "^[[:space:]]*(ssize_t|int|long)[[:space:]]+${_sym}[[:space:]]*\(" "$KSU_HIDE_C"; then
+        MISSING_SYMS="$MISSING_SYMS ${_sym}"
+      fi
+    done
+    if [ -n "$MISSING_SYMS" ]; then
+      BLOCK_REASON="SUSFS 已切到接管式新模型（树内引用${TAKEOVER_SYMS}），但 KernelSU 未以非 static 符号导出：${MISSING_SYMS}（selinux_hide.c: ${KSU_HIDE_C:-未找到}）——补丁声明的 extern 链接期必然 undefined symbol，属上游 KernelSU 尚未同步该模型，本仓库无法适配"
+    else
+      echo "SUSFS 门控证据成立：接管式新模型，KernelSU 已导出${TAKEOVER_SYMS}"
+    fi
+  elif grep -q "ksu_selinux_hide_running" "$HOOKS_C"; then
     # 有手动钩子：必须同时具备侧信道修复 should_check_current，否则是旧 SUSFS。
     if [ "$(grep -c -e "should_check_current" -e "backup_sepolicy" "$HOOKS_C" || true)" = "0" ]; then
       BLOCK_REASON="hooks.c 含手动钩子 ksu_selinux_hide_running 但既无 should_check_current 也无 backup_sepolicy，属上游点名要更新的旧 SUSFS（隐藏可被检测）"
@@ -141,6 +181,15 @@ if [ -n "$BLOCK_REASON" ]; then
     3) 检查适配段是否真的生效：apply.sh 的 adapt_finasu_selinux_hide_model 需要
        KernelSU/kernel/feature/selinux_hide.c 已切到 backup_sepolicy 新模型；若该文件
        仍是假的（缺文件 / 仍含 fake_state），适配段会跳过，此时本门控照旧阻断。
+    4) 若报的是「接管式新模型」，那是**内核侧（KernelSU）还没同步**，不是本仓库
+       能改的：新版 SUSFS 把 selinux 钩子整体交给 KernelSU，要求 KernelSU 以非
+       static 符号导出 my_setprocattr / my_write_context / my_write_access。
+       BakaSU 目前把 my_write_* 写成 static 且整个实现被
+       #ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE 包住（SUSFS 打完补丁该
+       宏必然定义，实现在编译期被整体去掉），my_setprocattr 只有一个同名局部变量。
+       此时唯一可行的做法是**把 SUSFS 钉在切到该模型之前的最后一个可用提交**
+       （c06d5f8ef2b53d04c5e1c6b86dc3076f1e0e9f33），本仓库 apply.sh 的 8 处
+       fake_state → backup_sepolicy 改写正是为它准备的。
 GUIDE
   exit 1
 fi
@@ -153,17 +202,42 @@ GATE='# susfs build gate (replaces the unconditional upstream suspension 48fa4bb
 # checked against the same markers upstream named before the pause:
 #   <  6.6: manual hook (ksu_selinux_hide_running) without should_check_current
 #           means a stale (detectable) susfs: require an update;
+#   takeover model: the tree references my_setprocattr / my_write_context but
+#           KernelSU keeps them static (or drops them under
+#           KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE): link would fail;
 #   >= 6.6: susfs without security_context_to_sid_with_policy / backup_sepolicy
 #           would panic at runtime: require an update.
 KSU_COMPAT_KVER_LT66 := $(shell awk '"'"'$$1=="VERSION" { v = $$3 } $$1=="PATCHLEVEL" { p = $$3 } END { if (v < 6 || (v == 6 && p < 6)) print "yes" }'"'"' $(srctree)/Makefile)
 
+# Takeover model: the patched tree calls into KernelSU instead of touching
+# selinux internals itself. Only usable when KernelSU exports those helpers as
+# real (non-static) symbols; BakaSU keeps them static and compiles the whole
+# block out once KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE is defined.
+KSU_COMPAT_TAKEOVER_REF := $(shell grep -Eqs "my_setprocattr|my_write_context|my_write_access" $(srctree)/security/selinux/hooks.c $(srctree)/security/selinux/selinuxfs.c 2>/dev/null && echo yes)
+# 注意：GATE 是 make 语法，$(shell ...) 内部**不能出现不配对的圆括号**（make 会按括号
+# 配平来切分函数参数）。所以这里不能用 grep 的 [(] 去锚定函数调用的左括号，否则
+# make 直接报 "unterminated call to function 'shell'"，整次编译在解析阶段就失败。
+# 换个等价判据：行首类型 + 符号名（不含 static），命中即说明 KernelSU 以非 static
+# 形式声明/定义了该符号。
+KSU_COMPAT_TAKEOVER_EXPORT := $(shell grep -Eqs "^[[:space:]]*(ssize_t|int|long)[[:space:]]+my_(setprocattr|write_context|write_access)[[:space:]]*" $(srctree)/*/kernel/feature/selinux_hide.c $(srctree)/common/*/kernel/feature/selinux_hide.c 2>/dev/null && echo yes)
+
 ifeq ($(KSU_COMPAT_KVER_LT66),yes)
+ifneq ($(KSU_COMPAT_TAKEOVER_REF),)
+ifneq ($(KSU_COMPAT_TAKEOVER_EXPORT),)
+# KernelSU exports the takeover helpers, nothing to wait for
+else
+$(info -- $(REPO_NAME): susfs uses the takeover model but KernelSU keeps my_* static)
+$(info -- $(REPO_NAME): Please wait simonpunk update)
+$(error Please wait susfs update.)
+endif
+else
 ifneq ($(shell grep -q "ksu_selinux_hide_running" $(srctree)/security/selinux/hooks.c; echo $$?),0)
 # no manual hook: KernelSU falls back to its own auto hook, safe to build
 else ifeq ($(shell grep -c -e "should_check_current" -e "backup_sepolicy" $(srctree)/security/selinux/hooks.c),0)
 $(info -- $(REPO_NAME): susfs selinux_hide lacks the should_check_current side-channel fix)
 $(info -- $(REPO_NAME): Please wait simonpunk update)
 $(error Please wait susfs update.)
+endif
 endif
 else
 ifeq ($(shell grep -c -e "security_context_to_sid_with_policy" -e "backup_sepolicy" $(srctree)/security/selinux/selinuxfs.c),0)

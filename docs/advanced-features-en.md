@@ -1,8 +1,9 @@
 # 🧩 Advanced Features
 
-> This page collects six advanced topics: GhostLock Security Fix, Re-Kernel, the NoMount
-> metamodule, Droidspaces Container Support, Custom Commit Pinning, and Spoofing `/proc/config.gz`.
-> All are off by default. Mirrors the "Advanced Features" section in the main [README.md](../README.md).
+> This page collects seven advanced topics: GhostLock Security Fix, Re-Kernel, Network
+> Enhancement, the NoMount metamodule, Droidspaces Container Support, Custom Commit Pinning, and
+> Spoofing `/proc/config.gz`. All are off by default. See the "Quick links" table in the main
+> [README.md](../README.md) and the `docs/` directory.
 >
 > For local CLI usage see [💻 Local build docs](local-build-en.md); the Actions input name is
 > listed in the "Actions input" column of each table below.

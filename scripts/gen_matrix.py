@@ -123,7 +123,12 @@ def main() -> None:
         if not out_file:
             print("::error::$GITHUB_OUTPUT 未设置", file=sys.stderr)
             sys.exit(1)
-        payload = json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+        # android / kernel 不写进 matrix：下游 kernel-a1x 的 android_version 与
+        # kernel_version 都是写死的字面量，只消费 sub_level / os_patch_level /
+        # revision。每项少两个键，91 项的矩阵就少一大截，也避免两份真相漂移。
+        payload_entries = [{k: v for k, v in e.items() if k not in ("android", "kernel")}
+                           for e in entries]
+        payload = json.dumps(payload_entries, ensure_ascii=False, separators=(",", ":"))
         with open(out_file, "a", encoding="utf-8") as f:
             f.write(f"matrix={payload}\n")
             f.write(f"count={len(entries)}\n")

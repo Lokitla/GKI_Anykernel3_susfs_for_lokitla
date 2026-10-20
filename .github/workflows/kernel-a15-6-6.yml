@@ -27,7 +27,7 @@ on:
         type: boolean
         default: true
       use_kpm:
-        description: "KPM 模块支持（编译后修补 Image。6.12 及以上不支持：SukiSU 的 KPM 代码用了新内核已移除的 netlink_kernel_cfg.cb_mutex；6.6 是支持的）"
+        description: "KPM 模块支持（编译后修补 Image。6.12 及以上不支持：SukiSU 的 KPM 代码用了新内核已移除的 netlink_kernel_cfg.cb_mutex；6.6 也不修补 Image，实际可用范围是 SukiSU 系 + 内核 ≤ 6.1；且仅 SukiSU 系提供 KPM）"
         required: true
         type: choice
         default: "patched (开启并修补)"
@@ -270,7 +270,10 @@ jobs:
   build-kernels-a15-6-6:
     needs: [prepare-matrix, get-ksu-manager]
     # 管理器拉取失败/被跳过时不阻塞内核构建（ksuCommit 为空则内核跟随 main HEAD）
-    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' }}
+    # 空矩阵时也必须跳过：matrix.include=[] 会起 0 个作业、job 结果为 skipped，
+    # 若照跑，main.yml 的发布校验会因为「skipped」误判为通过而产出空 Release。
+    # 与 kernel-a16-6-12.yml 的条件保持一致（两个条件必须写在同一条 if 里）。
+    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' && needs.prepare-matrix.outputs.count != '0' }}
     name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
     strategy:
       fail-fast: false
