@@ -1671,6 +1671,8 @@ stage_sync_ksu_uapi() {
   #   这里改为按 $BRANCH（本阶段解析出的实际检出分支）选路径。
   case "${KSU_VARIANT}" in
     SukiSU|SukiSU\(*\))
+      # builtin-new / builtin-rebase 当前没有生产者（resolve_ksu_branch 只产出
+      # main / master / builtin / dev / 具体 commit）；保留是为了上游再加分支时不用改这里。
       case "${BRANCH:-main}" in
         builtin|builtin-new|builtin-rebase)
           UAPI_UPSTREAM="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${BRANCH}/kernel/include/uapi/supercall.h" ;;
@@ -3599,7 +3601,6 @@ fi
 run_set_build_time() { stage_set_build_time "$@"; }
 
 compile_kernel_once() {
-  local _pwd="$PWD"
   LOG_DIR="$WORKSPACE/build-logs"
   ATTEMPT_FILE="$LOG_DIR/.compile-attempt"
   mkdir -p "$LOG_DIR"
@@ -4258,10 +4259,9 @@ run_make_anykernel3() {
 
 stage_prepare_anykernel3() {
   log_stage "prepare_anykernel3" "准备 AnyKernel3 目录"
-  local _pwd="$PWD"
-  [ -s ./Image ] || { echo "::error::Image 缺失或为空，无法打包 AnyKernel3"; cd "$_pwd"; return 1; }
+  [ -s ./Image ] || { echo "::error::Image 缺失或为空，无法打包 AnyKernel3"; return 1; }
   mv ./Image "$ANYKERNEL3/Image" \
-    || { echo "::error::移动 Image 到 AnyKernel3 目录失败"; cd "$_pwd"; return 1; }
+    || { echo "::error::移动 Image 到 AnyKernel3 目录失败"; return 1; }
 
   # make_anykernel3 只在「上传全部」模式下执行，而本阶段只在非「上传全部」
   # 模式下执行，两者条件互斥 —— 非「上传全部」时 Image 被搬进 AnyKernel3 目录
@@ -4269,18 +4269,15 @@ stage_prepare_anykernel3() {
   local _zip
   _zip="$(anykernel3_zip_name)"
   [ -s "$ANYKERNEL3/Image" ] \
-    || { echo "::error::$ANYKERNEL3/Image 缺失或为空，拒绝打出无 Image 的刷机包"; cd "$_pwd"; return 1; }
+    || { echo "::error::$ANYKERNEL3/Image 缺失或为空，拒绝打出无 Image 的刷机包"; return 1; }
   # B-4：用 . 而非 ./*，否则以 . 开头的隐藏条目会被通配符漏掉；顺带排除 .git*
   ( cd "$ANYKERNEL3" && zip -r "../$_zip" . -x '*.git*' ) \
-    || { echo "::error::AnyKernel3 zip 打包失败"; cd "$_pwd"; return 1; }
+    || { echo "::error::AnyKernel3 zip 打包失败"; return 1; }
   if [ ! -s "$_zip" ]; then
     echo "::error::AnyKernel3 刷机包生成失败或为空: $_zip"
-    cd "$_pwd"
     return 1
   fi
   echo "已生成 AnyKernel3 刷机包: $_zip"
-
-  cd "$_pwd"
 }
 
 # 条件执行（等价原工作流 if:）

@@ -4,7 +4,8 @@
 #
 # 背景：build_kernel.sh 默认跟随 SukiSU_patch 上游 main 分支，零版本锚点，
 # 上游一旦被改（投毒或误改）无法察觉。本脚本下载当前上游文件、算出 sha256，
-# 写入 config/kpm_patch_sha256；此后构建会做 fail-closed 比对，不符即中止。
+# 写入 config/kpm_patch_sha256；此后构建会与本记录比对，不符只打 ::warning:: 并继续
+# （要钉死版本须显式传 EXPECTED_KPM_PATCH_SHA256，那时才 fail-closed 中止）。
 #
 # 用法:
 #   ./scripts/tools/pin_kpm_patch.sh              # 写入锚点（默认）
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --check) MODE="check"; shift ;;
     --clear) MODE="clear"; shift ;;
     --url)   URL="${2:?--url 需要参数}"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '3,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
@@ -71,5 +72,5 @@ mkdir -p "$REPO_ROOT/config"
 printf '%s\n' "$sha" > "$PIN_FILE"
 echo
 echo "✅ 已写入 $PIN_FILE"
-echo "   此后 build_kernel.sh 会做 fail-closed 比对；上游变更将中止构建。"
+echo "   此后 build_kernel.sh 会与本记录比对：不一致只告警不中止；要钉死请传 EXPECTED_KPM_PATCH_SHA256。"
 echo "   上游更新后重新运行本脚本刷新锚点。"

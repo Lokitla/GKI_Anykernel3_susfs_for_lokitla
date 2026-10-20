@@ -85,7 +85,7 @@ echo "步骤 2/2: FinaSU 内联适配修复..."
 # "FinaSU"，所以条件恒真，不是分支而是一个恒成立的块。保留它而不是去掉，是因为
 # 去掉必须把整段约 440 行一起减两格缩进，那是一次纯空白的大 diff，与「改动最小、
 # 不重排」的约定冲突；而变体守卫的真正位置在调用方
-# （scripts/build_kernel.sh:2016 的 `if [ "$KSU_VARIANT" = "FinaSU" ]`），本脚本
+# （scripts/build_kernel.sh:2043 的 `if [ "$KSU_VARIANT" = "FinaSU" ]`），本脚本
 # 也不会被其它变体调用。若将来要服务多变体，把这里的条件换成真实判据即可。
 if [ "$KSU_VARIANT" == "FinaSU" ]; then
   FINASU_KSU="$KERNEL_ROOT/KernelSU/kernel"

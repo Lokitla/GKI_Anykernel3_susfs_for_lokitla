@@ -119,7 +119,7 @@ def build_env(args, android, kernel, sub_level, os_patch):
         "OS_PATCH_LEVEL": os_patch,
         "KSU_VARIANT": args.ksu_variant,
         "KSU_MODE": "关闭",
-        "KSU_BRANCH_MODE": getattr(args, "ksu_branch_mode", "auto") or "auto",
+        "KSU_BRANCH_MODE": args.ksu_branch_mode or "auto",
         "VERSION": args.version or "",
         "REVISION": args.revision or "",
         "BUILD_TIME": args.build_time or "",
@@ -130,11 +130,11 @@ def build_env(args, android, kernel, sub_level, os_patch):
         "USE_KPM": KPM_MODES.get(args.kpm or "", "disabled (关闭)"),
         "USE_BBG": str(args.bbg).lower(),
         "USE_REKERNEL": str(args.rekernel).lower(),
-        "USE_NET_ENHANCE": str(getattr(args, "net_enhance", False)).lower(),
-        "SKIP_INCOMPATIBLE": str(getattr(args, "skip_incompatible", False)).lower(),
+        "USE_NET_ENHANCE": str(args.net_enhance).lower(),
+        "SKIP_INCOMPATIBLE": str(args.skip_incompatible).lower(),
         # [移植] NoMount 挂载元模块：与 Actions 的 use_nomount 对齐，
         # 否则本地 CLI 无法开启该阶段（USE_NOMOUNT 恒为 false）。
-        "USE_NOMOUNT": str(getattr(args, "nomount", False)).lower(),
+        "USE_NOMOUNT": str(args.nomount).lower(),
         "ENABLE_SUSFS": str(not args.no_susfs).lower(),
         "SUPP_OP": str(args.op8e).lower(),
         "DROIDSPACES": args.droidspaces,

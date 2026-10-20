@@ -168,7 +168,7 @@ The main differences: `main.yml` has no `kernel_version` / `os_patch_level` / `b
 
 | Artifact | Naming rule | When it appears |
 |---|---|---|
-| Flashable zip | `<android>-<kernel>.<sub-level>-<os_patch_level>-AnyKernel3.zip`, for example `android14-6.1.177-2025-02-AnyKernel3.zip` (`anykernel3_zip_name()`, `scripts/build_kernel.sh:4180-4182`) | Every build; in AnyKernel3-only mode it is the only artifact |
+| Flashable zip | `<android>-<kernel>.<sub-level>-<os_patch_level>-AnyKernel3.zip`, for example `android14-6.1.177-2025-02-AnyKernel3.zip` (`anykernel3_zip_name()`, `scripts/build_kernel.sh:4181-4183`) | Every build; in AnyKernel3-only mode it is the only artifact |
 | Kernel images | `*.img` → artifact `…-Images` | Upload-everything mode only |
 | Build logs | `build-logs/` → artifact `…-Build-Logs`; `main.yml` collects them into `AIO-BUILD-LOGS.zip` | Every build |
 | Rejected hunks | `patch-rejects/` → artifact `…-Rejects`; `main.yml` collects them into `AIO-REJ.zip` | Non-empty only when a hunk fails |
@@ -176,7 +176,7 @@ The main differences: `main.yml` has no `kernel_version` / `os_patch_level` / `b
 | SUSFS probe report | `susfs-probe/` → artifact `SUSFS-Probe-…` | Every build |
 | ccache | Release `Build Cache` (tag `ccache-cache`), asset `cache-<branch>-<android>-<kernel>-<sub>.tar.zst` plus a `.hmac` file | Only with `use_release_cache` |
 
-The AnyKernel3 zip is the [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) template directory plus the freshly built `Image` (`scripts/build_kernel.sh:4235-4250`); the file name comes from `anykernel3_zip_name()`, and `SUB_LEVEL` is embedded in it verbatim.
+The AnyKernel3 zip is the [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) template directory plus the freshly built `Image` (`scripts/build_kernel.sh:4236-4250`); the file name comes from `anykernel3_zip_name()`, and `SUB_LEVEL` is embedded in it verbatim.
 
 
 The repository currently holds 15 workflow files; `scripts/build_kernel.sh` is 4751 lines and `build.yml` has 21 steps.
@@ -199,7 +199,7 @@ KPM requires **all** of the following:
 
 1. **The variant ships KPM** — only the SukiSU family (including `SukiSU(40726)` and `SukiSU(40548)`). The kernels of `BakaSU`, `FinaSU`, `Official`, and `Next` **have no `config KPM`**; requesting KPM there is skipped with a warning (`scripts/build_kernel.sh:1585-1594`, the `KPM_SUPPORTED` check in `stage_add_kernelsu`).
 2. **Kernel ≤ 6.6** — 6.10 and newer turn it off automatically (`kpm/super_access.c` uses `netlink_kernel_cfg.cb_mutex`, which newer kernels removed).
-3. **Kernel ≠ 6.6** — 6.6 is a special case: the build still writes `CONFIG_KPM=y` but **skips the Image patch**, so the module cannot load; the log prints the Chinese message 「6.6 内核不支持 KPM 镜像修补」 (`scripts/build_kernel.sh:3898`).
+3. **Kernel ≠ 6.6** — 6.6 is a special case: the build still writes `CONFIG_KPM=y` but **skips the Image patch**, so the module cannot load; the log prints the Chinese message 「6.6 内核不支持 KPM 镜像修补」 (`scripts/build_kernel.sh:3899`).
 
 **So the only combination that can actually load KPM today is: SukiSU family + kernel ≤ 6.1.**
 
@@ -296,10 +296,10 @@ Every row below comes from a failure this repository actually hit, and the fix i
 | `undefined symbol: fake_state` | The patch still `extern`s the old `fake_state` model, while BakaSU / FinaSU upstream moved to `backup_sepolicy` + `security_*_with_policy` | Handled by `adapt_finasu_selinux_hide_model` in `susfs_fixes/apply.sh`; if anything is left over the build is aborted on purpose |
 | `undefined symbol: my_setprocattr / my_write_context / my_write_access` | SUSFS switched to the takeover model and expects KernelSU to export those three as non-`static` symbols; the chosen variant / kernel combination does not | The built-in pin table (`scripts/build_kernel.sh:705-709`) pins a linkable commit automatically; you can also pass `manager_commit=0,<SUSFS commit>`. For BakaSU it must be `c06d5f8`, see above |
 | `implicit declaration of function close_fd` | The FinaSU patch is written for the 5.15+ `close_fd()` API, while 5.10 only has `__close_fd(files, fd)` | `scripts/finasu_compat/apply.sh` rewrites it back to `ksu_close_fd()` (a ksyscall macro, version independent) |
-| `CONFIG_ZRAM_DEF_COMP_LZ4KD` is missing from the generated `.config`…Kconfig does not claim the symbol | On the kleaf/bazel path the `defconfig_fragment` is merged too late, so the choice falls back to its first visible member and stays there | `stage_config_zram` now pins the choice and writes `# … is not set` for the other members (`scripts/build_kernel.sh:3013-3030`) |
+| `CONFIG_ZRAM_DEF_COMP_LZ4KD` is missing from the generated `.config`…Kconfig does not claim the symbol | On the kleaf/bazel path the `defconfig_fragment` is merged too late, so the choice falls back to its first visible member and stays there | `stage_config_zram` now pins the choice and writes `# … is not set` for the other members (`scripts/build_kernel.sh:3015-3032`) |
 | BBG `flask.h` stage reports `ld: cannot find …` / missing `ld` | `GKI build/build.sh` rewrites `PATH` (without `/usr/bin`) before `make mrproper`; installing binutils via apt does not help and the step recovers by itself | **Do not** treat it as a missing dependency; see the comments in `scripts/build_kernel.sh` |
 | `Please wait susfs update.` or the SUSFS build being blocked | BakaSU upstream deliberately suspended SUSFS builds (commit `suspend susfs build`) | Intended gate; pin `c06d5f8` or wait. `resume_susfs.sh` becomes a no-op once upstream lifts the suspension |
-| `redefinition … struct lsm_id` versus `const struct lsm_id` | sukisu_compat and the kernel tree both define `lsm_id` | The guard also accepts `ksu_lsm_id` (`scripts/build_kernel.sh:3361-3363`) |
+| `redefinition … struct lsm_id` versus `const struct lsm_id` | sukisu_compat and the kernel tree both define `lsm_id` | The guard also accepts `ksu_lsm_id` (`scripts/build_kernel.sh:3363-3365`) |
 | The matrix is fully skipped yet reports success and publishes an empty Release | Old code treated `skipped` as passing and never checked for an empty matrix | Fixed: `main.yml` checks `count`, `check_build` was rewritten, empty-matrix jobs carry an `if` guard |
 
 Environment requirements, resuming an interrupted build and single-stage debugging are covered in the [local build guide](docs/local-build-en.md).

@@ -10,7 +10,7 @@
 # SukiSU 的 builtin 分支（内建内核实现 + SUSFS 产品线）与 main 分支是两条
 # 无共同祖先的独立线。官方管理器 APK 只能由 main 构建——builtin 是只含
 # kernel/ 与 uapi/ 的分支，连 manager/ 目录都没有（本仓库
-# .github/workflows/get-manager.yml:171-176 已记录这一点）。
+# .github/workflows/get-manager.yml:198 已记录这一点）。
 #
 # 管理器在 managerUAPIVersion > kernelUAPIVersion 时判定 requiresNewKernel，
 # 首页报「需要更新内核」（上游 userspace 侧 Natives.kt 的比对逻辑）。
@@ -70,7 +70,8 @@ if [ -z "$KSU_UAPI_URL" ]; then
     Official) KSU_UAPI_URL="https://raw.githubusercontent.com/tiann/KernelSU/main/uapi/supercall.h" ;;
     *)
       # SukiSU 系：main 与 builtin 是两条独立拓扑，UAPI 头路径也不同，按实际检出分支取。
-      _uapi_branch="${KSU_BRANCH_MODE_RESOLVED:-main}"
+      # BRANCH 由 build_kernel.sh 的 resolve_ksu_branch 导出（builtin 系分支名即 builtin）
+      _uapi_branch="${BRANCH:-main}"
       if [ "$_uapi_branch" = "builtin" ] || [ "$_uapi_branch" = "builtin-new" ] || [ "$_uapi_branch" = "builtin-rebase" ]; then
         KSU_UAPI_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${_uapi_branch}/kernel/include/uapi/supercall.h"
       else

@@ -104,7 +104,6 @@ if [ "$KSU_VARIANT" == "Next" ]; then
   echo "KernelSU Next..."
   REPO="KernelSU-Next/KernelSU-Next"
   KSUM="manager"
-  BRANCH="dev"
 elif [ "$KSU_VARIANT" == "SukiSU" ]; then
   echo "SukiSU..."
   REPO="SukiSU-Ultra/SukiSU-Ultra"
@@ -233,7 +232,6 @@ BEST_ACTUAL=0        # 实际版本最大值
 BEST_DIR=""          # 最佳候选目录
 MATCHED=0            # 是否精确匹配
 MAX_FETCH=6          # 限制下载数量，避免浪费带宽
-FETCHED=0            # 已下载数量
 BEST_SHA=""          # 最佳候选 run 的 head_sha（内核对齐用）
 # 严格对齐用：精确等于内核 KSU 版本的候选
 EXACT_LIST=""
@@ -428,10 +426,7 @@ while IFS= read -r LINE; do
     echo "已达下载上限 $MAX_FETCH，停止扫描"
     break
   fi
-  
-  SAFE_NAME=$(echo "$NAME" | tr '/ ' '__')
-  ZIP_NAME="$KSU_VARIANT-${SAFE_NAME}($KSU_VERSION).zip"
-  
+
   # 下载 APK 到临时目录
   CANDIDATE_DIR="$CANDIDATE_BASE/$FETCHED"
   mkdir -p "$CANDIDATE_DIR"

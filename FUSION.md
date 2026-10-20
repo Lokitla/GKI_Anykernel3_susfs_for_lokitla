@@ -58,7 +58,7 @@ scripts/build_kernel.sh        ← 单一真相源（完整功能，53 个阶段
 
 | | 融合前 | 融合后 |
 |---|---|---|
-| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（4706 行 shell） |
+| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（4703 行 shell） |
 | `build.yml` 职责 | 全部 | 仅 Actions 编排：缓存、上传、通知（21 步） |
 | 本地构建 | 不支持 | `python3 build.py ...` |
 | 逻辑份数 | 1（但绑死在 Actions） | 1（两个入口共用） |
@@ -195,8 +195,8 @@ shell 逻辑的，日常维护不需要再运行它。
    `5.10 / 5.15 / 6.1 / 6.6` 四个目录，没有 6.12。LingLuo 为此补了 6.12 补丁
    （commit `94fd545`、`ba3c27c`）。
    → **已解决**：本仓库 `zram_patch/6.12/` 已包含 `lz4kd.patch` 与 `lz4k_oplus.patch`，
-   `scripts/build_kernel.sh:2853-2862` 的 `zram_patch_file()` 优先取用本仓库版本（优先于上游
-   `SukiSU_patch`），`:2865` 的 `zram_lz4k_available()` 在校验齐全后才放行。
+   `scripts/build_kernel.sh:2855-2864` 的 `zram_patch_file()` 优先取用本仓库版本（优先于上游
+   `SukiSU_patch`），`:2867` 的 `zram_lz4k_available()` 在校验齐全后才放行。
    6.12 入口的 `use_zram` 仍默认 `false`（默认关闭），需要时可显式启用。
 
 ### 确定遗漏（合并上游移植分支时漏掉）
