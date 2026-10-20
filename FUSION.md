@@ -58,7 +58,7 @@ scripts/build_kernel.sh        ← 单一真相源（完整功能，53 个阶段
 
 | | 融合前 | 融合后 |
 |---|---|---|
-| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（4533 行 shell） |
+| 构建逻辑位置 | 内嵌在 `build.yml`（1583 行 YAML） | `scripts/build_kernel.sh`（4673 行 shell） |
 | `build.yml` 职责 | 全部 | 仅 Actions 编排：缓存、上传、通知（21 步） |
 | 本地构建 | 不支持 | `python3 build.py ...` |
 | 逻辑份数 | 1（但绑死在 Actions） | 1（两个入口共用） |
