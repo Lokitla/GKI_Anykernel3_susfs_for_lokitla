@@ -220,6 +220,10 @@ jobs:
           # 手动入口隐藏（恒启用），main.yml → get-manager.yml 的调用处写死 true，
           # 所以这里不要再把它加回载荷 —— 加了到不了任何环节。
 
+          # 2026-10-21：定时触发的构建默认**不**启用 SUSFS。
+          # 原因见 README「已知缺陷」：上游 SukiSU-Ultra #1008 之后 SukiSU 裸变体
+          # 的内核编译会失败，而 SUSFS 是失败面最大的一环；定时任务先只保证基本
+          # 可用，需要 SUSFS 请手动跑构建入口并显式勾选。
           case "$SCOPE" in
             "不构建")
               echo "本次只更新 sha-bakasu 分支，不触发构建"
@@ -244,7 +248,7 @@ jobs:
                   inputs: {
                     release_type: $release_type,
                     kernelsu_variant: "BakaSU",
-                    enable_susfs: true,
+                    enable_susfs: false,
                     use_kpm: "patched (开启并修补)",
                     droidspaces: "不启用",
                     build_time: "",
@@ -286,7 +290,7 @@ jobs:
                   inputs: {
                     kernel_version: "5.10",
                     kernelsu_variant: "BakaSU",
-                    enable_susfs: true,
+                    enable_susfs: false,
                     use_kpm: "patched (开启并修补)",
                     droidspaces: "不启用",
                     artifact_upload_mode: "仅上传 AnyKernel3.zip",

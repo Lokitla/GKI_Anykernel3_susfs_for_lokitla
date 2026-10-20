@@ -286,6 +286,18 @@ See [`docs/local-build-en.md`](docs/local-build-en.md) for prerequisites, option
 
 > Note: `--droidspaces` and `--artifact-mode` reuse the Actions choices verbatim, so they are **Chinese string literals** (`--droidspaces 不启用`, `--artifact-mode 仅 AnyKernel3` or `上传全部`); an English translation fails with `invalid choice`. `--kpm`, by contrast, takes the **English keys** `disabled` / `enabled` / `patched` (mapped to the Actions labels internally) — do not paste the dropdown's Chinese text.
 
+## ⚠️ Known defect: kernel build failure for plain SukiSU variants (upstream SukiSU-Ultra #1008, since 2026-10-20)
+
+| Item | Detail |
+|---|---|
+| Symptom | A SukiSU build fails in the "build kernel" step with three `-Werror` diagnostics from `drivers/kernelsu/manager/throne_tracker.c` |
+| Offending commit | SukiSU-Ultra `7ea0dd2b09bfc60e6b51a6a93fc9f49b349a9b2a` — `kernel: extract sig_fallback scan from throne_tracker into a weak hook (#1008)` (2026-10-20T15:37:08Z) |
+| Verbatim errors | `throne_tracker.c:7:28: error: attribute declaration must precede definition [-Werror,-Wignored-attributes]` (an `extern bool __attribute__((weak))` declared after the definition; `previous definition is here` points at `extension/dynamic_sig_fallback.c:115`); `throne_tracker.c:154:64: error: expected ';' at end of declaration`; `throne_tracker.c:303:13: error: address of function 'track_throne_sig_fallback_hook' will always evaluate to 'true' [-Werror,-Wpointer-bool-conversion]` |
+| Observed impact | 6.6 / 6.12 SukiSU on the kleaf path fails whenever `enable_susfs=true` (runs `39460775789`, `39460791198`); any variant whose kernel-side KernelSU follows upstream HEAD is affected, i.e. whenever `manager_commit` is left empty |
+| Why this repository does not patch it | All three diagnostics live in KernelSU's own C sources; this repository neither forks nor edits upstream kernel code. Pinning the kernel-side KernelSU to a pre-#1008 commit does not help either: pinning the main lineage is rejected by this repository's SUSFS gate (the SUSFS SELinux patch conflicts with `ksu_patch_text`), while pinning the builtin lineage mismatches the new symbols the SUSFS patch expects (`undefined symbol: ksu_preinit_handle_post_execveat` / `ksu_setup_preinit_file` / `my_setprocattr`) |
+| Workarounds | 1. Use the **frozen variants** `SukiSU(40548)` / `SukiSU(40726)`, which pin sukisu to `3170a48c` (2026-03-09) / `5da52994` (2026-04-06), far older than the offending commit; 2. wait for upstream; 3. both `Auto_Trigger_*.yml` scheduled workflows now default `enable_susfs` to `false` |
+| Upstreams | [SukiSU-Ultra/SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (where the commit landed); for comparison, [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) and [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3) both last committed before it and have not handled it yet |
+
 ## 🧯 Troubleshooting: match the error
 
 Every row below comes from a failure this repository actually hit, and the fix is already in the scripts. Follow the remedy column instead of patching the apparent symptom (adding a dependency, editing an API).
@@ -300,6 +312,7 @@ Every row below comes from a failure this repository actually hit, and the fix i
 | BBG `flask.h` stage reports `ld: cannot find …` / missing `ld` | `GKI build/build.sh` rewrites `PATH` (without `/usr/bin`) before `make mrproper`; installing binutils via apt does not help and the step recovers by itself | **Do not** treat it as a missing dependency; see the comments in `scripts/build_kernel.sh` |
 | `Please wait susfs update.` or the SUSFS build being blocked | BakaSU upstream deliberately suspended SUSFS builds (commit `suspend susfs build`) | Intended gate; pin `c06d5f8` or wait. `resume_susfs.sh` becomes a no-op once upstream lifts the suspension |
 | `redefinition … struct lsm_id` versus `const struct lsm_id` | sukisu_compat and the kernel tree both define `lsm_id` | The guard also accepts `ksu_lsm_id` (`scripts/build_kernel.sh:3363-3365`) |
+| `throne_tracker.c:7:28: attribute declaration must precede definition` plus two more `-Werror` errors | Upstream SukiSU-Ultra #1008 (`7ea0dd2b`) declares the weak symbol's `extern` after its definition, which clang rejects under `-Werror` | **Do not** patch this repository's scripts and do **not** add `-Wno-*` flags; see the "Known defect" section above, use the frozen variants `SukiSU(40548)` / `SukiSU(40726)`, or wait for upstream |
 | The matrix is fully skipped yet reports success and publishes an empty Release | Old code treated `skipped` as passing and never checked for an empty matrix | Fixed: `main.yml` checks `count`, `check_build` was rewritten, empty-matrix jobs carry an `if` guard |
 
 Environment requirements, resuming an interrupted build and single-stage debugging are covered in the [local build guide](docs/local-build-en.md).

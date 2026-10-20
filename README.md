@@ -286,6 +286,18 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 
 > 注意：`build.py` 的 `--droidspaces` 与 `--artifact-mode` 直接沿用 Actions 的**中文字面量**（`--droidspaces 不启用`、`--artifact-mode 仅 AnyKernel3` / `上传全部`），照抄英文会报 `invalid choice`；而 `--kpm` 收的是**英文键** `disabled` / `enabled` / `patched`（内部再映射成 Actions 的中文文案），别把下拉框那串中文抄进来。
 
+## ⚠️ 已知缺陷：SukiSU 裸变体的内核编译失败（上游 SukiSU-Ultra #1008，2026-10-20 起）
+
+| 项 | 内容 |
+|---|---|
+| 现象 | SukiSU 变体在「构建内核」阶段失败，日志里是 `drivers/kernelsu/manager/throne_tracker.c` 的三条 `-Werror` 报错 |
+| 触发提交 | SukiSU-Ultra `7ea0dd2b09bfc60e6b51a6a93fc9f49b349a9b2a` —— `kernel: extract sig_fallback scan from throne_tracker into a weak hook (#1008)`（2026-10-20T15:37:08Z） |
+| 报错原文 | `throne_tracker.c:7:28: error: attribute declaration must precede definition [-Werror,-Wignored-attributes]`（`extern bool __attribute__((weak))` 写在定义之后，`previous definition is here` 指向 `extension/dynamic_sig_fallback.c:115`）；`throne_tracker.c:154:64: error: expected ';' at end of declaration`；`throne_tracker.c:303:13: error: address of function 'track_throne_sig_fallback_hook' will always evaluate to 'true' [-Werror,-Wpointer-bool-conversion]` |
+| 实测影响 | 6.6 / 6.12 的 SukiSU（kleaf 路径）在 `enable_susfs=true` 下必红（run `39460775789`、`39460791198`）；内核侧 KernelSU 跟随上游 HEAD 的变体都会撞上，`manager_commit` 留空即受影响 |
+| 为何本仓库不代修 | 三条报错全在 KernelSU 上游的 C 源码里，本仓库既不 fork 也不修改上游内核代码；把内核侧 KernelSU 钉到该提交之前同样走不通——钉 main 血统会被本仓库的 SUSFS 门禁拦下（SUSFS 的 SELinux 补丁与 `ksu_patch_text` 冲突），钉 builtin 血统则与 SUSFS 补丁期望的新符号对不上（`undefined symbol: ksu_preinit_handle_post_execveat` / `ksu_setup_preinit_file` / `my_setprocattr`） |
+| 规避 | ① 用**冻结变体** `SukiSU(40548)` / `SukiSU(40726)`：它们把 sukisu 钉在 `3170a48c`（2026-03-09）/ `5da52994`（2026-04-06），远早于该提交，不受影响；② 等上游修复；③ 两个 `Auto_Trigger_*.yml` 定时任务已把 `enable_susfs` 默认改为 `false` |
+| 相关上游 | [SukiSU-Ultra/SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)（问题提交所在仓）；同类骨架可对照 [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS)、[LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)，二者最后提交均早于该提交，目前同样未处理 |
+
 ## 🧯 排错速查（按报错对号入座）
 
 下面每一行都来自本仓库真实跑出来的失败，处置也都已写进脚本；遇到时先看「处置」，不要按字面去补依赖或改 API。
@@ -300,6 +312,7 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 | BBG `flask.h` 阶段 `ld: cannot find …` / 找不到 `ld` | `GKI build/build.sh` 在 `make mrproper` 之前重写了 `PATH`（不含 `/usr/bin`）；apt 装 binutils 对它无效，且该步会自愈 | **不要**当成依赖缺失去改，见 `scripts/build_kernel.sh` 里的相关注释 |
 | `Please wait susfs update.` 或 SUSFS 构建被拦 | BakaSU 上游主动挂起 SUSFS 构建（`suspend susfs build`） | 设计内拦截；钉 `c06d5f8` 或等上游解除，`resume_susfs.sh` 在上游解除后自动 no-op |
 | `redefinition … struct lsm_id` vs `const struct lsm_id` | sukisu_compat 与内核树重复定义 `lsm_id` | 守卫同时认 `ksu_lsm_id`（`scripts/build_kernel.sh:3363-3365`） |
+| `throne_tracker.c:7:28: attribute declaration must precede definition` 等三条 `-Werror` | 上游 SukiSU-Ultra #1008（`7ea0dd2b`）把弱符号的 `extern` 声明写在定义之后，clang 在 `-Werror` 下直接报错 | **不要**改本仓库脚本，也**不要**去补 GCC/clang 的 `-Wno-*`；见上文「已知缺陷」，用冻结变体 `SukiSU(40548)` / `SukiSU(40726)` 或等上游修 |
 | 矩阵全 skipped 却算成功、发出空 Release | 旧版把 `skipped` 当通过；空矩阵判断缺失 | 已修：`main.yml` 判 `count`、`check_build` 重写、空矩阵 job 加 `if` |
 
 更多环境要求、断点续建与单步调试见 [本地构建文档](docs/local-build.md)。
