@@ -105,7 +105,81 @@ The current matrix is summarized below; see [`matrix.json`](.github/workflows/co
 
 Linux 6.12 is not part of the `auto` matrix. To build it, run the Android 16 (6.12) workflow manually or use `kernel-custom.yml`.
 
-The repository currently holds 15 workflow files; `scripts/build_kernel.sh` is 4673 lines and `build.yml` has 21 steps.
+> **Android release ↔ kernel version**: Android 12 → 5.10, Android 13 → 5.15, Android 14 → 6.1, Android 15 → 6.6, Android 16 → 6.12. The `a12` … `a16` tokens in workflows and arguments mean exactly that mapping; do not cross-pick them (for example, a14 means 6.1 only).
+
+## 🚀 Quick start: pick the right entry point
+
+| What you want | Entry point | Key inputs |
+|---|---|---|
+| Try a single version first | `kernel-custom.yml` | `kernel_version` + `os_patch_level` (for example `66`) + `kernelsu_variant`; upload mode defaults to AnyKernel3 only |
+| Build the full matrix for one Android release | `kernel-a12-5-10.yml` … `kernel-a16-6-12.yml` (5 files) | Usually just run the workflow; version lists come from the `full` matrix |
+| Build the common subset and publish a Release | `main.yml` | `kernelsu_variant`, `release_type`; narrow the targets with `build_targets` (`a12,a14` or `all`) |
+| Build fully locally | `build.py` | See [local build](docs/local-build-en.md) |
+
+Three practical notes:
+
+- **For a first run** use `kernel-custom.yml` with `build_scope=指定版本` and the default AnyKernel3-only upload mode: one run produces exactly one flashable zip, which costs the least time and quota.
+- **`os_patch_level` is not a kernel version**: it accepts a sub-level code (`66`, `236`), an os-patch date (`2022-01`), or several comma-separated values (`66,236,2022-01`); a single value builds a single version.
+- **Only `main.yml` creates a Release.** The five `kernel-a1x` workflows and `kernel-custom.yml` only upload Actions artifacts.
+
+## Build input reference
+
+Both tables are checked item by item against the workflow definitions (`.github/workflows/main.yml`, `.github/workflows/kernel-custom.yml`); defaults and option lists follow those files.
+
+### `kernel-custom.yml`: 21 inputs, the most complete set (includes `Next`)
+
+| Input | Type | Default | Meaning |
+|---|---|---|---|
+| `kernel_version` | choice | `5.10` | 5.10 / 5.15 / 6.1 / 6.6 / 6.12 |
+| `kernelsu_variant` | choice | `BakaSU` | SukiSU / SukiSU(40726) / SukiSU(40548) / BakaSU / FinaSU / Official / `Next` |
+| `enable_susfs` | boolean | `true` | Integrate SUSFS; each variant integrates it differently, see Variants and SUSFS |
+| `use_kpm` | choice | `patched (开启并修补)` | disabled / enabled / patched; see KPM compatibility for the combinations that actually work |
+| `droidspaces` | choice | `不启用` | Disabled / 678 / 123 / 345; 6.12 only offers disabled or enabled |
+| `artifact_upload_mode` | choice | `仅上传 AnyKernel3.zip` | Or upload everything (boot `*.img` files as well) |
+| `build_scope` | choice | `指定版本` | Single version / all versions / LTS only; `os_patch_level` is ignored for the latter two |
+| `os_patch_level` | string | `66` | Sub-level code or os-patch date; comma-separated values allowed |
+| `version` | string | empty | Custom version name (optional) |
+| `build_time` | string | fixed UTC string | Custom build time; `N` or empty means the current UTC time |
+| `use_zram` | boolean | `true` | ZRAM/LZ4KD enhancement |
+| `use_bbg` | boolean | `false` | Baseband guard |
+| `use_rekernel` | boolean | `false` | Re-Kernel driver |
+| `use_nomount` | boolean | `false` | NoMount meta-module |
+| `cve_2026_43499_patch` | boolean | `false` | CVE-2026-43499 / 53163 rtmutex fix chain |
+| `droidspaces_ntsync` | boolean | `false` | NTSync support (Droidspaces must be enabled first) |
+| `use_net_enhance` | boolean | `false` | All IPSet types + BBR + FQ/FQ_CODEL + IPv6 NAT and more |
+| `supp_op` | boolean | `false` | OnePlus 8E support; **do not enable it on other devices** |
+| `send_telegram` | boolean | `true` | Telegram notification (requires secrets) |
+| `use_release_cache` | boolean | `false` | Keep ccache in a GitHub Release (see Artifacts and naming) |
+| `manager_commit` | string | empty | `<manager & kernel KSU>,<SUSFS>`; empty follows upstream, see the dedicated section below |
+
+### `main.yml`: 20 inputs
+
+| Input | Type | Default | Meaning |
+|---|---|---|---|
+| `release_type` | choice | `Release` | Release / Pre-Release / Actions |
+| `kernelsu_variant` | choice | `BakaSU` | 6 variants, **`Next` is not offered** |
+| `build_targets` | string | `all` | Comma-separated `a12/a13/a14/a15/a16` or `all`; only matching jobs run |
+| `export_susfs_patches` | boolean | `true` | Collect the SUSFS integration patches (SukiSU / BakaSU / FinaSU) |
+| `enable_susfs` / `use_kpm` / `use_zram` / `droidspaces` and the rest | — | — | Same meaning as the identically named inputs in `kernel-custom.yml` |
+
+The main differences: `main.yml` has no `kernel_version` / `os_patch_level` / `build_scope` / `artifact_upload_mode` (it builds the fixed `auto` subset and narrows it with `build_targets`) and does not offer `Next`; on the other hand it adds `export_susfs_patches`.
+
+## Artifacts and naming
+
+| Artifact | Naming rule | When it appears |
+|---|---|---|
+| Flashable zip | `<android>-<kernel>.<sub-level>-<os_patch_level>-AnyKernel3.zip`, for example `android14-6.1.177-2025-02-AnyKernel3.zip` (`anykernel3_zip_name()`, `scripts/build_kernel.sh:4221-4222`) | Every build; in AnyKernel3-only mode it is the only artifact |
+| Kernel images | `*.img` → artifact `…-Images` | Upload-everything mode only |
+| Build logs | `build-logs/` → artifact `…-Build-Logs`; `main.yml` collects them into `AIO-BUILD-LOGS.zip` | Every build |
+| Rejected hunks | `patch-rejects/` → artifact `…-Rejects`; `main.yml` collects them into `AIO-REJ.zip` | Non-empty only when a hunk fails |
+| SUSFS integration patches | `susfs-patch/` → artifact `SUSFS-Patch-<variant>-…`; `main.yml` collects them into `SUSFS-Patches-<variant>` | When patch export is enabled |
+| SUSFS probe report | `susfs-probe/` → artifact `SUSFS-Probe-…` | Every build |
+| ccache | Release `Build Cache` (tag `ccache-cache`), asset `cache-<branch>-<android>-<kernel>-<sub>.tar.zst` plus a `.hmac` file | Only with `use_release_cache` |
+
+The AnyKernel3 zip is the [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) template directory plus the freshly built `Image` (`scripts/build_kernel.sh:4282-4291`); the file name comes from `anykernel3_zip_name()`, and `SUB_LEVEL` is embedded in it verbatim.
+
+
+The repository currently holds 15 workflow files; `scripts/build_kernel.sh` is 4751 lines and `build.yml` has 21 steps.
 
 ## Features
 
@@ -123,9 +197,9 @@ Optional features are controlled by workflow inputs or local CLI flags. Availabl
 
 KPM requires **all** of the following:
 
-1. **The variant ships KPM** — only the SukiSU family (including `SukiSU(40726)` and `SukiSU(40548)`). The kernels of `BakaSU`, `FinaSU`, `Official`, and `Next` **have no `config KPM`**; requesting KPM there is skipped with a warning (`scripts/build_kernel.sh:1541-1542`).
+1. **The variant ships KPM** — only the SukiSU family (including `SukiSU(40726)` and `SukiSU(40548)`). The kernels of `BakaSU`, `FinaSU`, `Official`, and `Next` **have no `config KPM`**; requesting KPM there is skipped with a warning (`scripts/build_kernel.sh:1618-1619`, the `KPM_SUPPORTED` check in `stage_add_kernelsu`).
 2. **Kernel ≤ 6.6** — 6.10 and newer turn it off automatically (`kpm/super_access.c` uses `netlink_kernel_cfg.cb_mutex`, which newer kernels removed).
-3. **Kernel ≠ 6.6** — 6.6 is a special case: the build still writes `CONFIG_KPM=y` but **skips the Image patch**, so the module cannot load; the log prints the Chinese message 「6.6 内核不支持 KPM 镜像修补」 (`scripts/build_kernel.sh:3761`).
+3. **Kernel ≠ 6.6** — 6.6 is a special case: the build still writes `CONFIG_KPM=y` but **skips the Image patch**, so the module cannot load; the log prints the Chinese message 「6.6 内核不支持 KPM 镜像修补」 (`scripts/build_kernel.sh:3939`).
 
 **So the only combination that can actually load KPM today is: SukiSU family + kernel ≤ 6.1.**
 
@@ -211,6 +285,24 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 See [`docs/local-build-en.md`](docs/local-build-en.md) for prerequisites, options, resuming, and single-phase debugging.
 
 > Note: `--droidspaces` and `--artifact-mode` reuse the Actions choices verbatim, so they are **Chinese string literals** (`--droidspaces 不启用`, `--artifact-mode 仅 AnyKernel3` or `上传全部`); an English translation fails with `invalid choice`. `--kpm`, by contrast, takes the **English keys** `disabled` / `enabled` / `patched` (mapped to the Actions labels internally) — do not paste the dropdown's Chinese text.
+
+## 🧯 Troubleshooting: match the error
+
+Every row below comes from a failure this repository actually hit, and the fix is already in the scripts. Follow the remedy column instead of patching the apparent symptom (adding a dependency, editing an API).
+
+| Error / symptom | Root cause | Remedy |
+|---|---|---|
+| `fs/namespace.c Hunk #1 FAILED at 32` (or similar `Hunk #N FAILED` in `task_mmu.c` / `exec.c`) | The monthly source tree and the SUSFS patch disagree on how many `#include` lines exist (one extra or one missing), so the whole hunk context stops matching | `adjust_context_include()` adds or removes the line and restores the tree afterwards (`scripts/susfs_fixes/apply.sh:50-123`). If it still fails, read the include list and expected hunk printed in the log |
+| `undefined symbol: fake_state` | The patch still `extern`s the old `fake_state` model, while BakaSU / FinaSU upstream moved to `backup_sepolicy` + `security_*_with_policy` | Handled by `adapt_finasu_selinux_hide_model` in `susfs_fixes/apply.sh`; if anything is left over the build is aborted on purpose |
+| `undefined symbol: my_setprocattr / my_write_context / my_write_access` | SUSFS switched to the takeover model and expects KernelSU to export those three as non-`static` symbols; the chosen variant / kernel combination does not | The built-in pin table (`scripts/build_kernel.sh:727-731`) pins a linkable commit automatically; you can also pass `manager_commit=0,<SUSFS commit>`. For BakaSU it must be `c06d5f8`, see above |
+| `implicit declaration of function close_fd` | The FinaSU patch is written for the 5.15+ `close_fd()` API, while 5.10 only has `__close_fd(files, fd)` | `scripts/finasu_compat/apply.sh` rewrites it back to `ksu_close_fd()` (a ksyscall macro, version independent) |
+| `CONFIG_ZRAM_DEF_COMP_LZ4KD` is missing from the generated `.config`…Kconfig does not claim the symbol | On the kleaf/bazel path the `defconfig_fragment` is merged too late, so the choice falls back to its first visible member and stays there | `stage_config_zram` now pins the choice and writes `# … is not set` for the other members (`scripts/build_kernel.sh:3047-3064`) |
+| BBG `flask.h` stage reports `ld: cannot find …` / missing `ld` | `GKI build/build.sh` rewrites `PATH` (without `/usr/bin`) before `make mrproper`; installing binutils via apt does not help and the step recovers by itself | **Do not** treat it as a missing dependency; see the comments in `scripts/build_kernel.sh` |
+| `Please wait susfs update.` or the SUSFS build being blocked | BakaSU upstream deliberately suspended SUSFS builds (commit `suspend susfs build`) | Intended gate; pin `c06d5f8` or wait. `resume_susfs.sh` becomes a no-op once upstream lifts the suspension |
+| `redefinition … struct lsm_id` versus `const struct lsm_id` | sukisu_compat and the kernel tree both define `lsm_id` | The guard also accepts `ksu_lsm_id` (`scripts/build_kernel.sh:3392-3396`) |
+| The matrix is fully skipped yet reports success and publishes an empty Release | Old code treated `skipped` as passing and never checked for an empty matrix | Fixed: `main.yml` checks `count`, `check_build` was rewritten, empty-matrix jobs carry an `if` guard |
+
+Environment requirements, resuming an interrupted build and single-stage debugging are covered in the [local build guide](docs/local-build-en.md).
 
 ## Upstream update checks
 

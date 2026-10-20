@@ -105,7 +105,81 @@
 
 6.12 不在 `auto` 矩阵中。需要构建 6.12 时，请手动运行 Android 16（6.12）workflow 或使用 `kernel-custom.yml`。
 
-仓库当前共有 15 个工作流文件、`scripts/build_kernel.sh` 4673 行、`build.yml` 21 个步骤。
+> **Android 版本 ↔ 内核版本**：Android 12 → 5.10、Android 13 → 5.15、Android 14 → 6.1、Android 15 → 6.6、Android 16 → 6.12。workflow 与参数里的 `a12` … `a16` 就是这套映射，不要跨着选（例如 a14 只对应 6.1）。
+
+## 🚀 快速开始：先选对入口
+
+| 你想做什么 | 用哪个入口 | 关键输入 |
+|---|---|---|
+| 先编一个版本试试 | `kernel-custom.yml` | `kernel_version` + `os_patch_level`（如 `66`）+ `kernelsu_variant`；上传模式默认「仅上传 AnyKernel3.zip」 |
+| 编某个 Android 版本的全量矩阵 | `kernel-a12-5-10.yml` … `kernel-a16-6-12.yml`（5 个） | 一般直接 Run workflow；版本清单来自 `full` 矩阵 |
+| 走常用精简组合、产出 Release | `main.yml` | `kernelsu_variant`、`release_type`；用 `build_targets` 限定目标（`a12,a14` 或 `all`） |
+| 完全本地构建 | `build.py` | 见 [本地构建](docs/local-build.md) |
+
+三条实操提醒：
+
+- **第一次建议**：用 `kernel-custom.yml`、`build_scope=指定版本`、「仅上传 AnyKernel3.zip」——一次 Run 只出一个刷机包，最省时间与额度。
+- **`os_patch_level` 不是内核版本**：它接受子版本代号（`66`、`236`）、补丁级别日期（`2022-01`），也能逗号分隔多个（`66,236,2022-01`）；只填一个就只编一个。
+- **只有 `main.yml` 会建 Release**；五个 `kernel-a1x` 与 `kernel-custom.yml` 只上传 Actions 工件。
+
+## 构建输入速查
+
+以下两表按 workflow 定义逐项核对（`.github/workflows/main.yml`、`.github/workflows/kernel-custom.yml`），默认值与选项以文件为准。
+
+### `kernel-custom.yml`：21 项，选项最全（含 `Next`）
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `kernel_version` | choice | `5.10` | 5.10 / 5.15 / 6.1 / 6.6 / 6.12 |
+| `kernelsu_variant` | choice | `BakaSU` | SukiSU / SukiSU(40726) / SukiSU(40548) / BakaSU / FinaSU / Official / `Next` |
+| `enable_susfs` | boolean | `true` | 集成 SUSFS；各变体集成路径不同，见「变体与 SUSFS」 |
+| `use_kpm` | choice | `patched (开启并修补)` | disabled / enabled / patched；真正能生效的组合见「KPM 兼容性」 |
+| `droidspaces` | choice | `不启用` | 不启用 / 678 / 123 / 345；6.12 只有「不启用 / 启用」两项 |
+| `artifact_upload_mode` | choice | `仅上传 AnyKernel3.zip` | 或「上传全部」（额外产出 boot 等 `*.img`） |
+| `build_scope` | choice | `指定版本` | 指定版本 / 全部版本 / 仅 LTS；选后两者时 `os_patch_level` 不生效 |
+| `os_patch_level` | string | `66` | 子版本代号或补丁级别日期，可逗号分隔多个 |
+| `version` | string | 空 | 自定义版本名（可选） |
+| `build_time` | string | 固定 UTC 时间串 | 自定义构建时间；`N` 或留空 = 当前 UTC |
+| `use_zram` | boolean | `true` | ZRAM/LZ4KD 增强算法 |
+| `use_bbg` | boolean | `false` | BBG 基带保护 |
+| `use_rekernel` | boolean | `false` | Re-Kernel 驱动 |
+| `use_nomount` | boolean | `false` | NoMount 挂载元模块 |
+| `cve_2026_43499_patch` | boolean | `false` | CVE-2026-43499 / 53163 rtmutex 修复链 |
+| `droidspaces_ntsync` | boolean | `false` | NTSync 支持（需先启用 Droidspaces） |
+| `use_net_enhance` | boolean | `false` | IPSet 全类型 + BBR + FQ/FQ_CODEL + IPv6 NAT 等 |
+| `supp_op` | boolean | `false` | 一加 8E 支持；**非一加设备勿开** |
+| `send_telegram` | boolean | `true` | Telegram 通知（需配置 secrets） |
+| `use_release_cache` | boolean | `false` | 用 GitHub Release 存 ccache（见「产物与命名」） |
+| `manager_commit` | string | 空 | `<管理器&内核KSU>,<SUSFS>` 两段；留空跟随上游最新，语义见下文专节 |
+
+### `main.yml`：20 项
+
+| 输入 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `release_type` | choice | `Release` | Release / Pre-Release / Actions |
+| `kernelsu_variant` | choice | `BakaSU` | 6 个，**不含 `Next`** |
+| `build_targets` | string | `all` | 逗号分隔 `a12/a13/a14/a15/a16` 或 `all`，只跑命中的 job |
+| `export_susfs_patches` | boolean | `true` | 收集 SUSFS 集成补丁（SukiSU / BakaSU / FinaSU） |
+| `enable_susfs` / `use_kpm` / `use_zram` / `droidspaces` 等 | — | — | 与 `kernel-custom.yml` 同名项含义一致 |
+
+两表的主要差异：`main.yml` 没有 `kernel_version` / `os_patch_level` / `build_scope` / `artifact_upload_mode`（它跑固定的 `auto` 精简矩阵，用 `build_targets` 限定范围），也不开放 `Next`；反过来它多一个 `export_susfs_patches`。
+
+## 产物与命名
+
+| 产物 | 命名规则 | 何时出现 |
+|---|---|---|
+| 刷机包 | `<android版本>-<内核版本>.<子版本>-<os_patch_level>-AnyKernel3.zip`，例 `android14-6.1.177-2025-02-AnyKernel3.zip`（`anykernel3_zip_name()`，`scripts/build_kernel.sh:4221-4222`） | 每次构建；「仅上传 AnyKernel3.zip」模式下是唯一产物 |
+| 内核镜像 | `*.img` → artifact `…-Images` | 仅「上传全部」模式 |
+| 构建日志 | `build-logs/` → artifact `…-Build-Logs`；`main.yml` 汇总为 `AIO-BUILD-LOGS.zip` | 每次构建 |
+| 补丁拒绝汇总 | `patch-rejects/` → artifact `…-Rejects`；`main.yml` 汇总为 `AIO-REJ.zip` | 有 hunk 失配时非空 |
+| SUSFS 集成补丁 | `susfs-patch/` → artifact `SUSFS-Patch-<变体>-…`；`main.yml` 汇总为 `SUSFS-Patches-<变体>` | `export_susfs_patches=true`（`main.yml`）或相应开关 |
+| SUSFS 探测报告 | `susfs-probe/` → artifact `SUSFS-Probe-…` | 每次构建 |
+| ccache 缓存 | Release `Build Cache`（tag `ccache-cache`），资产 `cache-<分支>-<android>-<kernel>-<sub>.tar.zst`（另带 `.hmac`） | 勾 `use_release_cache` 时 |
+
+AnyKernel3.zip 里就是 [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) 的模板目录 + 刚编出的 `Image`（`scripts/build_kernel.sh:4282-4291`）；产物名由 `anykernel3_zip_name()` 生成，`SUB_LEVEL` 会直接拼进文件名。
+
+
+仓库当前共有 15 个工作流文件、`scripts/build_kernel.sh` 4751 行、`build.yml` 21 个步骤。
 
 ## 功能
 
@@ -123,9 +197,9 @@
 
 KPM 需要以下条件**同时**满足：
 
-1. **变体提供 KPM** —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）。`BakaSU` / `FinaSU` / `Official` / `Next` 的内核**没有 `config KPM`**，请求了也会被跳过并打印警告（`scripts/build_kernel.sh:1541-1542`）。
+1. **变体提供 KPM** —— 只有 SukiSU 系（含 `SukiSU(40726)` / `SukiSU(40548)`）。`BakaSU` / `FinaSU` / `Official` / `Next` 的内核**没有 `config KPM`**，请求了也会被跳过并打印警告（`scripts/build_kernel.sh:1618-1619`，`stage_add_kernelsu` 里的 `KPM_SUPPORTED` 判定）。
 2. **内核 ≤ 6.6** —— 6.10 及以上会自动关闭（`kpm/super_access.c` 用了新内核已移除的 `netlink_kernel_cfg.cb_mutex`）。
-3. **内核 ≠ 6.6** —— 6.6 是特例：构建脚本会写入 `CONFIG_KPM=y`，但**跳过 Image 修补**，模块实际加载不了，日志会打印「6.6 内核不支持 KPM 镜像修补」（`scripts/build_kernel.sh:3761`）。
+3. **内核 ≠ 6.6** —— 6.6 是特例：构建脚本会写入 `CONFIG_KPM=y`，但**跳过 Image 修补**，模块实际加载不了，日志会打印「6.6 内核不支持 KPM 镜像修补」（`scripts/build_kernel.sh:3939`）。
 
 **因此当前真正能加载 KPM 的组合是：SukiSU 系 + 内核 ≤ 6.1。**
 
@@ -211,6 +285,24 @@ python3 build.py --android android14 --kernel 6.1 --sub-level 124 --os-patch 202
 更多环境要求、参数、断点续建与单步调试说明见 [`docs/local-build.md`](docs/local-build.md)。
 
 > 注意：`build.py` 的 `--droidspaces` 与 `--artifact-mode` 直接沿用 Actions 的**中文字面量**（`--droidspaces 不启用`、`--artifact-mode 仅 AnyKernel3` / `上传全部`），照抄英文会报 `invalid choice`；而 `--kpm` 收的是**英文键** `disabled` / `enabled` / `patched`（内部再映射成 Actions 的中文文案），别把下拉框那串中文抄进来。
+
+## 🧯 排错速查（按报错对号入座）
+
+下面每一行都来自本仓库真实跑出来的失败，处置也都已写进脚本；遇到时先看「处置」，不要按字面去补依赖或改 API。
+
+| 报错 / 现象 | 根因 | 处置 |
+|---|---|---|
+| `fs/namespace.c Hunk #1 FAILED at 32`（或 `task_mmu.c` / `exec.c` 同类 `Hunk #N FAILED`） | 月度源码树与 SUSFS 补丁对 `#include` 的行数不一致（多一行或少一行）→ hunk 上下文整段失配 | 已有 `adjust_context_include()` 自动补/删并在打完后还原（`scripts/susfs_fixes/apply.sh:50-123`）。若仍失败，看日志里打印的该文件 include 列表与补丁期望的 hunk |
+| `undefined symbol: fake_state` | 补丁按旧 `fake_state` 模型 `extern`，而 BakaSU / FinaSU 上游早已换成 `backup_sepolicy` + `security_*_with_policy` | 自动改写（`adapt_finasu_selinux_hide_model`，同样在 `susfs_fixes/apply.sh`）；若日志说「改写 N 处」后仍有残留，脚本会直接中止 |
+| `undefined symbol: my_setprocattr / my_write_context / my_write_access` | SUSFS 已切「接管式」，要求 KernelSU 以非 `static` 符号导出这三个；该变体 / 内核组合不满足 | 脚本内置变体钉表（`scripts/build_kernel.sh:727-731`）会在你未显式指定时自动钉住；也可手动 `manager_commit=0,<SUSFS提交>`。BakaSU 必须 `c06d5f8`，见上文 |
+| `implicit declaration of function close_fd` | FinaSU 上游补丁按 ≥5.15 的 `close_fd()` 写死，而 5.10 只有 `__close_fd(files, fd)` | `scripts/finasu_compat/apply.sh` 自动改回 `ksu_close_fd()`（ksyscall 宏，与版本无关） |
+| `CONFIG_ZRAM_DEF_COMP_LZ4KD` 不在生成的 `.config` 里…Kconfig 未认领该符号 | kleaf/bazel 路径下 `defconfig_fragment` 合并太晚，choice 回落到首个可见成员且值粘性 | 已由 `stage_config_zram` 显式钉住并写出其余成员 `# … is not set`（`scripts/build_kernel.sh:3047-3064`） |
+| BBG `flask.h` 阶段 `ld: cannot find …` / 找不到 `ld` | `GKI build/build.sh` 在 `make mrproper` 之前重写了 `PATH`（不含 `/usr/bin`）；apt 装 binutils 对它无效，且该步会自愈 | **不要**当成依赖缺失去改，见 `scripts/build_kernel.sh` 里的相关注释 |
+| `Please wait susfs update.` 或 SUSFS 构建被拦 | BakaSU 上游主动挂起 SUSFS 构建（`suspend susfs build`） | 设计内拦截；钉 `c06d5f8` 或等上游解除，`resume_susfs.sh` 在上游解除后自动 no-op |
+| `redefinition … struct lsm_id` vs `const struct lsm_id` | sukisu_compat 与内核树重复定义 `lsm_id` | 守卫同时认 `ksu_lsm_id`（`scripts/build_kernel.sh:3392-3396`） |
+| 矩阵全 skipped 却算成功、发出空 Release | 旧版把 `skipped` 当通过；空矩阵判断缺失 | 已修：`main.yml` 判 `count`、`check_build` 重写、空矩阵 job 加 `if` |
+
+更多环境要求、断点续建与单步调试见 [本地构建文档](docs/local-build.md)。
 
 ## 上游更新
 
