@@ -125,6 +125,35 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
     exit 1
   fi
 
+  # 0i) 上游 10_enable_susfs_for_ksu.patch 的 preinit.c hunk 把 FinaSU 原本的
+  #     ksu_close_fd(fd) 改写成了 close_fd(fd)（该补丁里唯一一处 +close_fd）。
+  #     close_fd(unsigned int fd) 是 5.15 之后才有的内核 API：android12-5.10 的
+  #     include/linux/fdtable.h 只有 __close_fd(struct files_struct *, unsigned int)，
+  #     于是 5.10 上必然报
+  #       preinit.c:126:9: error: implicit declaration of function 'close_fd'
+  #       [-Werror,-Wimplicit-function-declaration]
+  #     同一条补丁在 5.15/6.1/6.6/6.12 上不会暴露，属上游补丁对旧内核的兼容缺陷。
+  #     FinaSU 原本的写法 ksu_close_fd() 是 util.h 里的宏（ksyscall(close, fd)，
+  #     走 ksu syscall 表，与内核版本无关），这里把改写点改回它，并 fail-closed 断言。
+  FINASU_PREINIT="$FINASU_KSU/preinit/preinit.c"
+  if [ -f "$FINASU_PREINIT" ] && grep -qE '(^|[^_[:alnum:]])close_fd\(' "$FINASU_PREINIT"; then
+    if ! grep -q '#include "util.h"' "$FINASU_PREINIT"; then
+      echo '::error::FinaSU preinit.c 使用 ksu_close_fd 但缺少 util.h 头文件' >&2
+      exit 1
+    fi
+    # 只匹配裸 close_fd(，跳过 ksu_close_fd( 与 __close_fd(
+    sed -i -E 's/(^|[^_[:alnum:]])close_fd\(/\1ksu_close_fd(/g' "$FINASU_PREINIT"
+    if grep -qE '(^|[^_[:alnum:]])close_fd\(' "$FINASU_PREINIT"; then
+      echo '::error::FinaSU preinit.c 仍有裸 close_fd() 调用（5.10 无该 API，结构可能已变化）' >&2
+      exit 1
+    fi
+    grep -q 'ksu_close_fd(' "$FINASU_PREINIT" || {
+      echo '::error::FinaSU preinit.c 改写后未出现 ksu_close_fd()' >&2
+      exit 1
+    }
+    echo 'FinaSU preinit.c: close_fd() 已改回 ksu_close_fd()（5.10 没有 close_fd API）'
+  fi
+
   # 0b) SUSFS 内核补丁在 security/selinux/*.c 中以 extern 引用了这些符号，需与 BakaSU 一致
   #     改为全局定义，否则 ThinLTO 链接阶段会报 undefined symbol。
   #     - 6 个通用符号（>=5.10 用到）：
