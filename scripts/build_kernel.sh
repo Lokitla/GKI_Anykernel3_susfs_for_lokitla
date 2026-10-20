@@ -3041,6 +3041,29 @@ EOF
     fi
   fi
 
+  # bazel/kleaf 路径（树里没有 build/build.sh）只把 defconfig 的「新增行」当
+  # defconfig_fragment 合并，而 Kconfig choice 的默认值在首次 make gki_defconfig 时
+  # 就已经按当时可见的成员定死了：那一刻 fragment 还没合并、CRYPTO_LZ4KD 还是 n，
+  # 于是 default ZRAM_DEF_COMP_LZ4KD 不可见，choice 回落到第一个可见成员（LZO/LZORLE）；
+  # olddefconfig 之后也不会因为 CRYPTO_LZ4KD 被打开而改选默认值（choice 的值是粘性的）。
+  # 结果 .config 里永远没有 CONFIG_ZRAM_DEF_COMP_LZ4KD，verify_config_landing 必失败
+  # （报「Kconfig 未认领该符号，被静默丢弃」）。这里直接写死选择，并按 Kconfig 里真实
+  # 存在的成员逐个关掉——choice 同时选两个成员会被 Kconfig 丢弃其中一个。
+  if [ ! -f "$KERNEL_ROOT/build/build.sh" ]; then
+    ZRAM_KCONFIG_FILE="$KERNEL_ROOT/common/drivers/block/zram/Kconfig"
+    {
+      echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y"
+      if [ -f "$ZRAM_KCONFIG_FILE" ]; then
+        grep -E '^config[[:space:]]+ZRAM_DEF_COMP_' "$ZRAM_KCONFIG_FILE" \
+          | awk '{print $2}' | while read -r _zc; do
+              [ "$_zc" = "ZRAM_DEF_COMP_LZ4KD" ] && continue
+              echo "# CONFIG_$_zc is not set"
+            done
+      fi
+    } >> "$CONFIG_FILE" || true
+    echo "已显式钉住 zram 默认压缩算法（bazel fragment 路径）: CONFIG_ZRAM_DEF_COMP_LZ4KD=y"
+  fi
+
   cd "$_pwd"
 }
 
@@ -3838,6 +3861,10 @@ stage_verify_config_landing() {
     echo "::error title=功能落盘校验失败::${#fails[@]} 项请求的功能未落进生成的 .config，不会编进内核"
     printf '  - %s\n' "${fails[@]}"
     echo "::error::此处中断，不产出「声称启用、实际没有」的可刷产物"
+    # 现场诊断：区分「符号被 Kconfig 丢弃」与「choice 选了别的成员」两种成因——
+    # 前者在 .config 里连影子都没有，后者会看到另一个 ZRAM_DEF_COMP_* 成员 =y。
+    echo "::error::诊断：$found 里 ZRAM/ZSMALLOC 相关的行如下（最多 40 行）"
+    grep -nE 'ZRAM|ZSMALLOC' "$found" | head -n 40 || true
     return 1
   fi
   echo "功能落盘校验通过：生成的 .config 已认领全部 ${#expect[@]} 项请求"
