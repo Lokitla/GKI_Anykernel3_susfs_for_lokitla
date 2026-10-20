@@ -163,6 +163,10 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
   #       5.15/6.1 用不到，所以之前只在 6.6 上暴露为链接失败）：
   #       security_context_to_sid_with_policy / security_sid_to_context_with_policy /
   #       security_compute_av_user_with_policy
+  #     - 3 个函数（SUSFS gen3 接管式主补丁在 security/selinux/{selinuxfs,hooks}.c 里
+  #       extern 引用；上游 10_enable_susfs_for_ksu.patch 的去 static hunk 在本树失配，
+  #       导致 5.10 链接期 undefined symbol: my_write_context/my_write_access/my_setprocattr）：
+  #       my_write_context / my_write_access / my_setprocattr
   FINASU_SELINUX_HIDE="$FINASU_KSU/feature/selinux_hide.c"
   if grep -q '^static bool ksu_selinux_hide_enabled ' "$FINASU_SELINUX_HIDE"; then
     sed -i \
@@ -176,6 +180,10 @@ if [ "$KSU_VARIANT" == "FinaSU" ]; then
       -e 's|^static int security_sid_to_context_with_policy|int security_sid_to_context_with_policy|' \
       -e 's|^static void security_compute_av_user_with_policy|void security_compute_av_user_with_policy|' \
       -e 's|^static void __nocfi security_compute_av_user_with_policy|void __nocfi security_compute_av_user_with_policy|' \
+      -e 's|^static ssize_t my_write_context|ssize_t my_write_context|' \
+      -e 's|^static ssize_t my_write_access|ssize_t my_write_access|' \
+      -e 's|^static int my_setprocattr|int my_setprocattr|' \
+      -e 's|^static int __nocfi my_setprocattr|int __nocfi my_setprocattr|' \
       "$FINASU_SELINUX_HIDE"
   fi
 
@@ -550,12 +558,19 @@ KSU_KBUILD_EOF
     || ! grep -q '^int security_context_to_sid_with_policy' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^int security_sid_to_context_with_policy' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^void security_compute_av_user_with_policy' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^ssize_t my_write_context' "$FINASU_SELINUX_HIDE" \
+    || ! grep -q '^ssize_t my_write_access' "$FINASU_SELINUX_HIDE" \
+    || ! grep -qE '^int (__nocfi )?my_setprocattr\(const char' "$FINASU_SELINUX_HIDE" \
     || ! grep -q '^int ksu_handle_execveat_ksud(int \*fd, struct filename \*\*filename_ptr,' "$FINASU_KSI"; then
     echo "::error::FinaSU 适配修复失败，代码结构可能已变化" >&2
     exit 1
   fi
   if grep -qE '^static (int|void) (__nocfi )?security_(context_to_sid_with_policy|sid_to_context_with_policy|compute_av_user_with_policy)' "$FINASU_SELINUX_HIDE"; then
     echo "::error::FinaSU selinux_hide.c 的 security_*_with_policy 仍未全局化（6.6 会链接失败）" >&2
+    exit 1
+  fi
+  if grep -qE '^static (ssize_t|int) (__nocfi )?(my_write_context|my_write_access|my_setprocattr)' "$FINASU_SELINUX_HIDE"; then
+    echo "::error::FinaSU selinux_hide.c 的 my_write_context/my_write_access/my_setprocattr 仍未全局化（SUSFS 接管式主补丁链接失败）" >&2
     exit 1
   fi
   if grep -qE 'ksu_syscall_hook_init\(\)|ksu_syscall_hook_manager_(init|exit)\(\)' "$FINASU_INIT"; then
