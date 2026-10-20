@@ -54,14 +54,36 @@ else
   echo "lsm_hook.c 不存在或无需 lsm_id 兼容补丁，跳过"
 fi
 
-SUPER_FILE="$KSU_DIR/kernel/kpm/super_access.c"
-if [ -f "$SUPER_FILE" ] && grep -q 'DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)' "$SUPER_FILE"; then
+# super_access.c 的位置随 KernelSU 布局变化：
+#   main / 旧版      -> kernel/kpm/super_access.c
+#   builtin(unity)  -> kernel/extension/kpm/super_access.c（被 kernel/ksu.c #include 进来）
+# 只探旧路径会让 builtin 上的 6.11+ cb_mutex 修复静默跳过，直到编译期才炸
+# （android16-6.12 那次就是落到 "不存在，跳过" 之后报 cb_mutex 无成员）。
+SUPER_FILE=""
+for SUPER_CAND in "$KSU_DIR/kernel/extension/kpm/super_access.c" \
+                 "$KSU_DIR/kernel/kpm/super_access.c"; do
+  if [ -f "$SUPER_CAND" ] && grep -q 'DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)' "$SUPER_CAND"; then
+    SUPER_FILE="$SUPER_CAND"
+    break
+  fi
+done
+if [ -n "$SUPER_FILE" ]; then
   if grep -q 'KERNEL_VERSION(6, 11, 0)' "$SUPER_FILE"; then
     echo "super_access.c 已包含 cb_mutex 版本守卫，跳过"
   else
     echo "应用 cb_mutex 兼容补丁 (6.11+ 移除 netlink_kernel_cfg.cb_mutex)..."
-    patch -p1 --forward -d "$KSU_DIR" < "$COMPAT_DIR/sukisu-cb-mutex-6.11.patch" \
-      || fail "cb_mutex 兼容补丁应用失败（SukiSU 上游代码可能已变化）"
+    # 补丁的 hunk 头按 kernel/kpm/ 写死；命中 extension/kpm/ 时先改写路径再打。
+    CB_MUTEX_PATCH="$COMPAT_DIR/sukisu-cb-mutex-6.11.patch"
+    if [ "$SUPER_FILE" = "$KSU_DIR/kernel/extension/kpm/super_access.c" ]; then
+      CB_MUTEX_PATCH="$(mktemp)"
+      sed 's|kernel/kpm/super_access\.c|kernel/extension/kpm/super_access.c|g' \
+        "$COMPAT_DIR/sukisu-cb-mutex-6.11.patch" > "$CB_MUTEX_PATCH"
+    fi
+    if ! patch -p1 --forward -d "$KSU_DIR" < "$CB_MUTEX_PATCH"; then
+      [ "$CB_MUTEX_PATCH" = "$COMPAT_DIR/sukisu-cb-mutex-6.11.patch" ] || rm -f "$CB_MUTEX_PATCH"
+      fail "cb_mutex 兼容补丁应用失败（SukiSU 上游代码可能已变化）"
+    fi
+    [ "$CB_MUTEX_PATCH" = "$COMPAT_DIR/sukisu-cb-mutex-6.11.patch" ] || rm -f "$CB_MUTEX_PATCH"
     grep -q 'KERNEL_VERSION(6, 11, 0)' "$SUPER_FILE" \
       || fail "cb_mutex 兼容补丁应用后校验失败"
     echo "super_access.c: 6.11+ 已跳过 cb_mutex 成员"

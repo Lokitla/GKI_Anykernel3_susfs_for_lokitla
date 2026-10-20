@@ -3366,7 +3366,13 @@ EOF
     for LSM_HOOKS_C in KernelSU/kernel/hook/lsm_hooks.c \
                        KernelSU/kernel/hook/lsm_hook.c; do
       [ -f "$LSM_HOOKS_C" ] || continue
-      grep -q 'KSU_LSM_ARG' "$LSM_HOOKS_C" && continue
+      # 已经带 ksu_lsm_id 就说明 sukisu_compat 补丁先一步处理过了（它会插一份
+      # static struct lsm_id，并把 6.8+ 分支改成传 &ksu_lsm_id）；此时再插一份
+      # const 版本就是重定义（android16-6.12 报的 struct lsm_id vs const struct
+      # lsm_id 正是这么来的）。所以两种写法都要算“已处理”。
+      if grep -q 'KSU_LSM_ARG' "$LSM_HOOKS_C" || grep -q 'ksu_lsm_id' "$LSM_HOOKS_C"; then
+        continue
+      fi
       grep -q 'ARRAY_SIZE(ksu_hooks), "ksu"' "$LSM_HOOKS_C" || continue
       perl -0pi -e 's{security_add_hooks\(ksu_hooks,\s*ARRAY_SIZE\(ksu_hooks\),\s*"ksu"\)}{security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), KSU_LSM_ARG)}g' "$LSM_HOOKS_C"
       # 补上宏/变量定义本体。用 python 而不是 perl：早先这里用 perl -0pi 插块，

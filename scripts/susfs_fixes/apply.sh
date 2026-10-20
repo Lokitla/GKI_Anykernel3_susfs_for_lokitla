@@ -41,6 +41,21 @@ apply_patch_checked() {
   return 0
 }
 
+# 判断当前补丁的 hunk 上下文是否真的引用了某个 include 行。
+# 上游 SUSFS 补丁在不同代际对 include 的假设不同：旧代际（自带 static my_*）
+# 只假设 mm/memory.c 有 trace/hooks/mm.h；新代际（接管式）才额外假设
+# fs/namespace.c 有 trace/hooks/blk.h、fs/proc/task_mmu.c 有 trace/hooks/mm.h。
+# 所以补 include 必须以“这个补丁自己要不要”为准，不能无条件补——
+# 多补一行反而会让该文件的 hunk 上下文失配（a13 gen1 即如此）。
+patch_needs_context_include() {
+  local inc="$1" target="$2"
+  awk -v want="#include <$inc>" -v tgt="+++ b/$target" '
+    index($0, "+++ b/") == 1 { cur = ($0 == tgt); next }
+    cur && (substr($0, 1, 1) == " " || substr($0, 1, 1) == "+") && substr($0, 2) == want { found = 1 }
+    END { exit found ? 0 : 1 }' \
+    "$SUSFS_PATCH"
+}
+
 echo "应用 SUSFS 补丁..."
 
 SUSFS_PATCH="50_add_susfs_in_gki-$ANDROID_VERSION-$KERNEL_VERSION.patch"
@@ -248,16 +263,18 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     fi
     adjust_legacy_fdinfo_context
   fi
-  # 上游补丁的 hunk 上下文假定 namespace.c 里有 trace/hooks/blk.h、
-  # task_mmu.c 里有 trace/hooks/mm.h，但 AOSP 各月度分支的 namespace.c
-  # 实际都没有 blk.h（该头文件只在 android16-6.12 起存在）。缺就临时补入，
-  # 打完补丁再删掉（末尾还原段），否则这两个 hunk 会整段失配。
-  if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
+  # 只有"接管式"补丁的 hunk 上下文才假定 namespace.c 里有 trace/hooks/blk.h、
+  # task_mmu.c 里有 trace/hooks/mm.h；固定提交的旧代际补丁并不依赖它们
+  # （a13 gen1 的 hunk1 上下文里根本没有 blk.h）。所以先问补丁要不要，再决定补不补——
+  # 无条件补入会让旧代际补丁的上下文多一行而整段失配。
+  if patch_needs_context_include "trace/hooks/blk.h" "fs/namespace.c" \
+    && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
     echo "临时补入 Android 13 5.15 namespace.c 的 trace/hooks/blk.h 上下文"
     sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
     NS_BLK_H_ADDED=1
   fi
-  if ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+  if patch_needs_context_include "trace/hooks/mm.h" "fs/proc/task_mmu.c" \
+    && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
     echo "临时补入 Android 13 5.15 task_mmu.c 的 trace/hooks/mm.h 上下文"
     sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
     TM_MM_H_ADDED=1
@@ -273,7 +290,8 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "临时调整 Android 14 6.1 dma-buf.h 上下文"
     sed -i '/^#include <linux\/cpufreq_times.h>$/a #include <linux/dma-buf.h>' fs/proc/base.c
   fi
-  if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
+  if patch_needs_context_include "trace/hooks/blk.h" "fs/namespace.c" \
+    && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
     echo "临时补入 Android 14 6.1 namespace.c 的 trace/hooks/blk.h 上下文"
     sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
     NS_BLK_H_ADDED=1
@@ -294,7 +312,8 @@ fi
 if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
   # 补丁 hunk 的上下文里有 fs/exec.c 的 #include <linux/dma-buf.h>，
   # 而 android16-6.12 的月度树在 ksm.h 之后并没有这一行；缺失时临时补入。
-  if ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
+  if patch_needs_context_include "linux/dma-buf.h" "fs/exec.c" \
+    && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
     echo "临时补入 Android 16 6.12 exec.c 的 dma-buf.h 上下文"
     sed -i '/^#include <linux\/ksm.h>$/a #include <linux/dma-buf.h>' fs/exec.c
     EXEC_DMABUF_ADDED=1
