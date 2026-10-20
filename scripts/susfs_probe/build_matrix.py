@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 本仓库自有的 SUSFS 原始补丁探测工具（不来自第三方），用于汇总上游补丁在各内核上的兼容性。
 """生成 SUSFS 原始补丁探测的构建矩阵。
 
 从 data_source 分支（默认 dev）现取 data/<android>/<kernel>.json，按输入过滤后

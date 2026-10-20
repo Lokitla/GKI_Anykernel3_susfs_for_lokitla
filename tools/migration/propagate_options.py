@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 一次性迁移留档（不参与构建）。见同目录 README.md；请勿在新改动中复用。
 """把新增的三个选项贯通到上层 workflow（按唯一锚点插入，保留注释与格式）。"""
 from pathlib import Path
 

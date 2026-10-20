@@ -16,15 +16,20 @@ GNU FAQ 指出，GPL-3.0 与 GPL-2.0-only 不兼容；允许选择 GPL 后续版
 | [AOSP kernel/common](https://android.googlesource.com/kernel/common/) / Linux | GKI 内核源码 | 内核主体 GPL-2.0-only，部分文件有兼容的单独声明 | 作为被修改和构建的内核基线 |
 | [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) | SUSFS 补丁应用到内核源码；通常由构建输入启用 | 上游 `1.3.0` LICENSE 标注 GPL-3.0-or-later | 与 GPL-2.0-only 内核组合存在高风险；见上文 |
 | [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)、[BakaSU](https://github.com/Baka-SU/BakaSU)、[KernelSU](https://github.com/tiann/KernelSU)、[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) | 可选 KernelSU 实现；构建时取各自仓库/分支并使用内核侧目录 | 根仓库许可不能代替 `kernel/`、`kernel/LICENSE` 与具体文件头；不同变体和提交可能不同 | 发布前应固定提交并逐项核对实际编入的文件。本表不对所有变体作统一兼容结论 |
-| [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3) / [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3) | 上游改进参考；本项目构建时另行拉取 AnyKernel3 刷机包脚本 | 上游仓库和脚本可能有不同许可；以实际检出版本的文件头、LICENSE 为准 | 刷机包中的脚本、工具与内核镜像需分别标注来源和许可 |
+| [WildKernels/AnyKernel3](https://github.com/WildKernels/AnyKernel3) | **本项目构建时实际拉取的刷机包脚本来源**（`gki-2.0` 分支，见 `scripts/build_kernel.sh`） | 上游仓库和脚本可能有不同许可；以实际检出版本的文件头、LICENSE 为准 | 刷机包中的脚本、工具与内核镜像需分别标注来源和许可 |
 | [sidex15/susfs4ksu-module](https://github.com/sidex15/susfs4ksu-module) | 单独的用户态 SUSFS 模块 ZIP | 上游标注 AGPL-3.0 | 独立模块，与内核源码分开打包；分发模块时仍须遵守其许可证 |
 | [FinaSU](https://github.com/LyraVoid/FinaSU) | 可选内核实现与官方管理器 APK；构建时按最新 Release tag 固定内核源码，APK 证书写入内核第二信任槽 | GitHub 仓库标记 GPL-3.0；FinaSU 构建适配脚本来自下列 LingLuo17/AnyKernel3 文件，按其 GPL-3.0 许可保留 | Release 中记录实际 FinaSU commit；分发 APK 时应同时提供对应源码与许可证信息。内核代码与 GPL-2.0-only GKI 的兼容性需按实际来源和许可另行确认 |
+| [LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3)、[osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3) | 移植来源与上游改进参考（`resume_susfs.sh`、`finasu_compat/*` 由其改写而来）；**不是**本项目拉取的刷机包脚本 | 上游仓库标记 GPL-3.0；移植文件按其许可保留 | 移植文件分发时需提供对应上游源码与许可文本；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 | [BakaSU（原名 ReSukiSU）](https://github.com/Baka-SU/BakaSU) | KernelSU 变体和独立管理器 APK；[LingLuo17/AnyKernel3](https://github.com/LingLuo17/AnyKernel3) 的发布也列出 BakaSU/ReSukiSU 构建及管理器 APK 附件 | 内核目录 GPL-2.0-only；其他代码 GPL-3.0-or-later；图标/美术资源有单独条款 | 本仓库已有 BakaSU 变体，并由 `get-manager.yml` 从 Baka-SU/BakaSU 获取管理器；内核代码与管理器 APK 需分别履行各自许可义务 |
 | [WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches) | 可选三星 `min_kdp.c` 源码复制并编入内核 | 上游未见明确许可证声明 | 启用对应三星功能时有未授权风险；`STRICT_LICENSE_MODE` 会跳过该项 |
 | [Numbersf/Action-Build](https://github.com/Numbersf/Action-Build) | Unicode 修复补丁应用到内核源码 | 上游使用自定义条款；不是标准 GPL 许可，授权范围需权利人确认 | 应用后形成额外许可疑点；严格模式会跳过该补丁。现有文档不再推断该条款允许分发内核产物 |
 | [SukiSU-Ultra/SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch) | 可选预编译 `patch_linux` 修改 Image；另有 ZRAM/LZ4KD 补丁 | `patch_linux` 未见明确许可证声明 | 是否允许使用、修改及分发修改后的产物需进一步确认；严格模式会跳过 KPM 修补 |
 | [maxsteeel/nomount](https://github.com/maxsteeel/nomount) | 可选 NoMount 内核源码，启用时编入内核 | 上游仓库 LICENSE 标注 GPL-3.0 | 若与 GPL-2.0-only 内核组合，存在与 SUSFS 类似的许可不兼容风险；默认关闭，严格模式本身不覆盖此选项 |
 | [Re-Kernel](https://github.com/Sakion-Team/Re-Kernel)、[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS)、[Baseband Guard](https://github.com/vc-teahouse/Baseband-guard) | 可选驱动或补丁进入内核 | 分别以实际文件头及固定上游提交为准；仓库级许可不足以代表所有复制文件 | 应记录每次构建所用提交，并在分发前检查兼容性 |
+| `zram/lz4/`（lz4.c、lz4hc.c、lz4.h、lz4hc.h） | 内核 ZRAM 使用的 LZ4/LZ4HC 压缩实现，由 `zram/lz4/Makefile` 编入 | [LZ4](https://github.com/lz4/lz4)，Copyright (C) 2011-2023, Yann Collet，**BSD-2-Clause**（逐文件头保留） | BSD-2-Clause 与 GPL-2.0-only 兼容，可并入内核作品；分发时保留版权与许可文本 |
+| `zram/lz4/lz4armv8/`（lz4accel.c、lz4accel.h、lz4armv8.S） | ARM64 NEON LZ4 解压加速，`CONFIG_ARM64` 时编入内核 | **NEON 优化实现，源自 Huawei EROFS** 内核 LZ4 解压汇编；本仓库补版权/许可头，随内核按 `GPL-2.0-only` 声明 | 上游未单独给出仓库级许可文件，已按内核树内分布形态声明；分发前建议再向上游确认 |
+| 本仓库 `zram_patch/6.12/` | 6.12 内核的 lz4kd / lz4k_oplus 补丁，构建时优先于上游 SukiSU_patch | 本仓库按融合流程整理，具体改动源自上游 zram 补丁链 | 与 6.10+ 的 ZRAM 后端相关；分发时随内核产物一并受内核许可约束 |
+| 本仓库 `scripts/susfs_probe/` | SUSFS 原始补丁探测工具（`build_matrix.py` / `aggregate.py` / `split_summary.py` / `write_result.py`），仅用于探测矩阵，不进入内核产物 | `GPL-2.0-or-later`（本仓库自维护） | 结论数据由 `susfs-probe.yml` 生成，与内核产物无关 |
 
 ## 管理器与发布产物
 

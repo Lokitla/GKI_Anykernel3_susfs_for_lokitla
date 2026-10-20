@@ -41,6 +41,87 @@ apply_patch_checked() {
   return 0
 }
 
+# 判断当前补丁的 hunk 上下文是否真的引用了某个 include 行。
+# 上游 SUSFS 补丁在不同代际对 include 的假设不同：旧代际（自带 static my_*）
+# 只假设 mm/memory.c 有 trace/hooks/mm.h；新代际（接管式）才额外假设
+# fs/namespace.c 有 trace/hooks/blk.h、fs/proc/task_mmu.c 有 trace/hooks/mm.h。
+# 所以补 include 必须以“这个补丁自己要不要”为准，不能无条件补——
+# 多补一行反而会让该文件的 hunk 上下文失配（a13 gen1 即如此）。
+patch_needs_context_include() {
+  local inc="$1" target="$2"
+  awk -v want="#include <$inc>" -v tgt="+++ b/$target" '
+    index($0, "+++ b/") == 1 { cur = ($0 == tgt); next }
+    cur && (substr($0, 1, 1) == " " || substr($0, 1, 1) == "+") && substr($0, 2) == want { found = 1 }
+    END { exit found ? 0 : 1 }' \
+    "$SUSFS_PATCH"
+}
+
+# 同一目标还有第三种差异：补丁自己把这一行当"新增行"写进 hunk（=树里不必须有它）。
+patch_adds_context_include() {
+  local inc="$1" target="$2"
+  awk -v want="#include <$inc>" -v tgt="+++ b/$target" '
+    index($0, "+++ b/") == 1 { cur = ($0 == tgt); next }
+    cur && substr($0, 1, 1) == "+" && substr($0, 2) == want { found = 1 }
+    END { exit found ? 0 : 1 }' \
+    "$SUSFS_PATCH"
+}
+
+# 在 anchor 行（整行字面量）的下一行插入 line。
+insert_line_after() {
+  local file="$1" anchor="$2" line="$3" esc
+  esc=$(printf '%s' "$anchor" | sed 's/[][\.^$*\/&]/\\&/g')
+  sed -i "/^$esc\$/a $line" "$file"
+}
+
+# 按整行字面量删除，写回原文件（保留 inode 与权限）。
+delete_line_literal() {
+  local file="$1" line="$2" tmp
+  tmp=$(mktemp)
+  grep -vxF "$line" "$file" > "$tmp" || true
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# 打补丁前把"补丁代际与月度树不一致"的 include 摆平，打完补丁再逐条还原。
+# 少一行 → hunk 上下文失配；多一行 → 同样整段失配
+# （a14 6.1 的 fs/namespace.c hunk1 就是这个形态：月度树里有 trace/hooks/blk.h，
+#  而钉住的补丁代际生成时还没有它，于是 hunk1 因多出一行被拒）。
+# 两个方向都要处理，且必须是临时改动（编译前还原），不能改变树的行为。
+CONTEXT_INC_UNDO=()
+
+adjust_context_include() {
+  local file="$1" inc="$2" anchor="$3" line
+  line="#include <$inc>"
+  local wants_ctx=0 wants_add=0 has=0
+  patch_needs_context_include "$inc" "$file" && wants_ctx=1
+  patch_adds_context_include "$inc" "$file" && wants_add=1
+  grep -qF "$line" "$file" && has=1
+  if [ "$wants_ctx" = "1" ] && [ "$has" = "0" ]; then
+    echo "临时补入 $file 的 $line（补丁以它作 hunk 上下文，树里缺这一行）"
+    insert_line_after "$file" "$anchor" "$line"
+    CONTEXT_INC_UNDO+=("add|$file|$anchor|$line")
+  elif [ "$wants_ctx" = "0" ] && [ "$wants_add" = "0" ] && [ "$has" = "1" ]; then
+    echo "临时移除 $file 的 $line（补丁代际不认识它，留着会让 hunk 上下文多一行而失配）"
+    delete_line_literal "$file" "$line"
+    CONTEXT_INC_UNDO+=("del|$file|$anchor|$line")
+  else
+    echo "上下文 include 无需调整：$file 的 $line（补丁上下文=${wants_ctx} 补丁新增=${wants_add} 树里有=${has}）"
+  fi
+}
+
+restore_context_includes() {
+  local rec mode file anchor line
+  [ "${#CONTEXT_INC_UNDO[@]}" -gt 0 ] || return 0
+  for rec in "${CONTEXT_INC_UNDO[@]}"; do
+    IFS='|' read -r mode file anchor line <<< "$rec"
+    case "$mode" in
+      add) echo "还原 $file 的临时 include（删除 $line）"; delete_line_literal "$file" "$line" ;;
+      del) echo "还原 $file 被临时移除的 include（补回 $line）"; insert_line_after "$file" "$anchor" "$line" ;;
+    esac
+  done
+  CONTEXT_INC_UNDO=()
+}
+
 echo "应用 SUSFS 补丁..."
 
 SUSFS_PATCH="50_add_susfs_in_gki-$ANDROID_VERSION-$KERNEL_VERSION.patch"
@@ -167,6 +248,15 @@ if [ "${SUSFS_RAW_PROBE:-false}" = "true" ]; then
 
   printf '%s\n' "$_patch_log" > "$PROBE_DIR/patch.log"
 
+  # 零 .rej 时不能走 printf 拼接：空展开会得到一个空串，拼进 JSON 就是 [""]
+  # （空字符串条目而非空数组），下游按「rej_files 条数 > 0」判断就会把最理想的
+  # 零冲突情形误判成有残留。这里显式区分两种情况。
+  if [ "${#_rej_files[@]}" -eq 0 ]; then
+    _rej_json=""
+  else
+    _rej_json=$(printf '"%s",' "${_rej_files[@]}" | sed 's/,$//')
+  fi
+
   cat > "$PROBE_DIR/apply.json" <<EOF
 {
   "raw_probe": true,
@@ -174,7 +264,7 @@ if [ "${SUSFS_RAW_PROBE:-false}" = "true" ]; then
   "susfs_side_fixes_applied": "$_side_applied",
   "patch_exit": $_rc,
   "rej": $_rej_count,
-  "rej_files": [$(printf '"%s",' "${_rej_files[@]}" | sed 's/,$//')],
+  "rej_files": [$_rej_json],
   "hunks_failed": $_hunks_failed,
   "hunks_ignored": $_hunks_ignored,
   "hunks_offset": null,
@@ -239,11 +329,12 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     fi
     adjust_legacy_fdinfo_context
   fi
-  if [[ "$OS_PATCH_LEVEL" == "lts" ]]; then
-    echo "临时调整 Android 13 5.15 LTS 头文件上下文"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-    sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
-  fi
+  # namespace.c 的 trace/hooks/blk.h、task_mmu.c 的 trace/hooks/mm.h 在不同
+  # 补丁代际里"要/不要"是反的：接管式代际把它们当 hunk 上下文（树里必须有），
+  # 旧代际（a13 gen1）的上下文里根本没有它们（树里多一行反而整段失配）。
+  # 所以交给 adjust_context_include：按补丁自己说不说，缺了补、多了临时删。
+  adjust_context_include fs/namespace.c trace/hooks/blk.h '#include "internal.h"'
+  adjust_context_include fs/proc/task_mmu.c trace/hooks/mm.h '#include <linux/pkeys.h>'
 fi
 
 if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
@@ -255,10 +346,9 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "临时调整 Android 14 6.1 dma-buf.h 上下文"
     sed -i '/^#include <linux\/cpufreq_times.h>$/a #include <linux/dma-buf.h>' fs/proc/base.c
   fi
-  if [[ "$CURRENT_SUB" -ge 157 ]]; then
-    echo "临时调整 Android 14 6.1 namespace.c 上下文"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-  fi
+  # 月度树的 namespace.c 里有 trace/hooks/blk.h，而钉住的补丁代际的 hunk1 上下文
+  # 生成时还没有它 → 树里多这一行会让 hunk1 整段被拒（a14 39367266799 的失败面）。
+  adjust_context_include fs/namespace.c trace/hooks/blk.h '#include "internal.h"'
 fi
 
 if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
@@ -273,10 +363,9 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
 fi
 
 if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]]; then
-    echo "临时调整 Android 16 6.12 exec.c 上下文"
-    sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
-  fi
+  # 有的补丁代际把 fs/exec.c 的 #include <linux/dma-buf.h> 当 hunk 上下文，
+  # 有的代际没有；两个方向都由 adjust_context_include 按补丁自身判定。
+  adjust_context_include fs/exec.c linux/dma-buf.h '#include <linux/ksm.h>'
 fi
 
 # 新版内核在 super.c 的 internal.h 之后新增了 trace/hooks/fs.h，
@@ -448,7 +537,7 @@ verify_susfs_landing() {
   # fake_state 这套新模型，写死的名字必然查不到 → 假阳性把正常构建判死。
   # 现在改成「补丁对该文件的新增代码行是否真的进了源码树」。
   local target
-  for target in security/selinux/hooks.c security/selinux/selinuxfs.c; do
+  for target in security/selinux/hooks.c security/selinux/selinuxfs.c security/selinux/ss/services.c; do
     grep -qF "b/$target" "$SUSFS_PATCH" 2>/dev/null || continue
     verify_susfs_landing_file "$target" "$target" "$(basename "$target")" || exit 1
   done
@@ -466,6 +555,20 @@ if [ "$SUSFS_REJ_COUNT" -gt 0 ]; then
   else
     echo "::error title=SUSFS 补丁冲突::有 ${SUSFS_REJ_COUNT} 处 hunk 未应用（列出如下）。确认可忽略时设 ALLOW_SUSFS_REJ=1"
     printf '%s\n' "${SUSFS_REJ_FILES[@]}"
+    # 月度树与补丁代际的差异常常只落在一行 include 上，而日志里只有补丁期望的样子、
+    # 看不到树实际的样子，失败一次就得再猜一轮。这里把现场直接打出来：
+    # 冲突文件自身的 include 列表 + 补丁期望的 hunk 内容（.rej 原样）。
+    for rej_src in "${SUSFS_REJ_FILES[@]}"; do
+      dump_src="${rej_src%.rej}"
+      echo "--- 冲突现场：$dump_src 的 include 列表 ---"
+      if [ -f "$dump_src" ]; then
+        grep -n '^#include' "$dump_src" | head -40
+      else
+        echo "（$dump_src 不存在）"
+      fi
+      echo "--- 补丁期望的该文件 hunk（$rej_src）---"
+      head -60 "$rej_src"
+    done
     exit 1
   fi
 fi
@@ -478,11 +581,13 @@ verify_susfs_landing
 # *backup_sepolicy 与 security_*_with_policy() 系列（kernel/feature/selinux_hide.c），
 # 而 SUSFS 主补丁仍按旧模型声明 extern struct selinux_state fake_state，
 # 链接期必然 undefined symbol: fake_state。这里按新模型改写补丁落地的引用。
+# 31eb14add 起补丁新增 services.c 段，my_security_context_to_sid_core 里也引用 fake_state，
+# 故改写范围必须同时覆盖 security/selinux/ss/services.c，否则链接期同样 undefined。
 #
 # 触发条件（三条同时成立才适配，否则原样放行）：
 #   1) KernelSU/kernel/feature/selinux_hide.c 存在；
 #   2) 该文件不含 fake_state（上游已切到 backup_sepolicy 新模型）；
-#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c} 里含 &fake_state。
+#   3) 源码树 security/selinux/{hooks.c,selinuxfs.c,ss/services.c} 里含 &fake_state。
 #
 # 定位思路参考 LingLuo17/GKI_KernelSU_SUSFS（GPL-2.0）与 BakaSU
 # kernel/feature/selinux_hide.c 的调用范例；本实现按本仓库的失败处理约定重写，
@@ -491,6 +596,7 @@ adapt_finasu_selinux_hide_model() {
   local hide_c="$KERNEL_ROOT/KernelSU/kernel/feature/selinux_hide.c"
   local hooks_c="security/selinux/hooks.c"
   local selinuxfs_c="security/selinux/selinuxfs.c"
+  local services_c="security/selinux/ss/services.c"
 
   if [ ! -f "$hide_c" ]; then
     echo "SELinux 模型适配：无 KernelSU/kernel/feature/selinux_hide.c，跳过"
@@ -500,7 +606,9 @@ adapt_finasu_selinux_hide_model() {
     echo "SELinux 模型适配：上游 selinux_hide.c 仍是 fake_state 旧模型，跳过"
     return 0
   fi
-  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null; then
+  if ! grep -q "&fake_state" "$selinuxfs_c" 2>/dev/null \
+    && ! grep -q "&fake_state" "$hooks_c" 2>/dev/null \
+    && ! grep -q "&fake_state" "$services_c" 2>/dev/null; then
     echo "SELinux 模型适配：源码树未引用 fake_state，跳过"
     return 0
   fi
@@ -516,7 +624,7 @@ adapt_finasu_selinux_hide_model() {
     return 1
   fi
 
-  "$PY" - "$hooks_c" "$selinuxfs_c" <<'PY'
+  "$PY" - "$hooks_c" "$selinuxfs_c" "$services_c" <<'PY'
 import io
 import sys
 
@@ -531,6 +639,7 @@ TOSID = "security_context_to_sid_with_policy(backup_sepolicy, %s, %s, %s, SECSID
 
 RULES = [
     ("extern struct selinux_state fake_state;", DECL),
+    ("fake_policy = rcu_dereference((&fake_state)->policy);", "fake_policy = backup_sepolicy;"),
     ("security_context_to_sid(&fake_state, buf, size, &sid, GFP_KERNEL)", TOSID % ("buf", "size", "&sid")),
     ("security_context_to_sid(&fake_state, value, size, &tmp_sid, GFP_KERNEL)", TOSID % ("value", "size", "&tmp_sid")),
     ("security_sid_to_context(&fake_state, sid, &canon, &len)", "security_sid_to_context_with_policy(backup_sepolicy, sid, &canon, &len)"),
@@ -584,6 +693,10 @@ if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
   fi
 fi
 
+# 打补丁前的临时 include 调整（补入或移除）在这里统一还原；
+# 必须在补丁落地之后、编译之前，保证源码树最终与月度树一致。
+restore_context_includes
+
 if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
   if [[ "$CURRENT_SUB" -le 41 ]]; then
     echo "还原 Android 13 5.15 临时调整"
@@ -592,15 +705,6 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     restore_legacy_fdinfo_context
     sed -i 's|i_uid_into_mnt(i_user_ns(&fi->inode), &fi->inode).val|i_uid_into_mnt(\&init_user_ns, \&fi->inode).val|g' fs/susfs.c
     sed -i 's|i_uid_into_mnt(i_user_ns(inode), inode).val|i_uid_into_mnt(\&init_user_ns, inode).val|g' fs/susfs.c
-  fi
-  if [[ "$OS_PATCH_LEVEL" == "lts" ]]; then
-    echo "还原 Android 13 5.15 LTS 头文件上下文"
-    if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-      sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-    fi
-    if ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
-      sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
-    fi
   fi
 fi
 
@@ -612,10 +716,6 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "还原 Android 14 6.1 base.c 临时调整"
     sed -i '/^#include <linux\/dma-buf.h>$/d' fs/proc/base.c
   fi
-  if [[ "$CURRENT_SUB" -ge 157 ]] && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-    echo "还原 Android 14 6.1 namespace.c 临时调整"
-    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-  fi
 fi
 
 if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
@@ -626,13 +726,6 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
   if [[ "$CURRENT_SUB" -le 57 ]]; then
     echo "还原 Android 15 6.6 memory.c 临时调整"
     sed -i '/^#include <linux\/zswap.h>$/d' mm/memory.c
-  fi
-fi
-
-if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]] && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
-    echo "还原 Android 16 6.12 exec.c 临时调整"
-    sed -i '0,/^#include /s//#include <linux\/dma-buf.h>\n&/' fs/exec.c
   fi
 fi
 

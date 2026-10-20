@@ -139,7 +139,8 @@ jobs:
     if: needs.matrix.outputs.count != '0'
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJSON(inputs.max_parallel || '20') }}
+      # max_parallel 已在 inputs 里声明 default: "20"，无需再 || 兜底
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         include: ${{ fromJSON(needs.matrix.outputs.include) }}
     uses: ./.github/workflows/build.yml

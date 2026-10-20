@@ -133,7 +133,9 @@ jobs:
             echo "$SHA_BRANCH 分支尚不存在，视为首次运行"
           fi
           echo "prev_sha=$PREV_SHA" >> "$GITHUB_OUTPUT"
-          git checkout "${{ github.ref_name }}"
+          # 上面可能 check 出的是孤儿分支，ref_name 若不存在（fork/PR 场景）
+          # 这里直接失败会中断整条自动触发；与下方「触发构建」步骤同样写法兜底。
+          git checkout "${{ github.ref_name }}" 2>/dev/null || true
 
       - name: 比对是否有新提交
         id: compare
@@ -147,7 +149,6 @@ jobs:
           echo "Previous SHA: ${PREV_SHA:-<none>}"
 
           if [[ "$FORCE" == "true" ]]; then
-            echo "new_commit=true"
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
             echo "手动强制触发"
           elif [[ "$CURR_SHA" != "$PREV_SHA" ]]; then

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# 来源：对照实现见 LingLuo17/AnyKernel3 的 b2f2598c（UAPI 2→5）与 1bb9d909；
+#       本文件按本仓库的构建流程与失败处理约定自行实现，未复制其代码。
+
 # SukiSU 内核侧 UAPI 对齐：把内核检出里的 KERNEL_SU_UAPI_VERSION（以及 UAPI 4
 # 引入的 KSU_GET_INFO_FLAG_BUNDLED 常量）对齐到官方管理器构建所用的值。
 #
@@ -6,7 +10,7 @@
 # SukiSU 的 builtin 分支（内建内核实现 + SUSFS 产品线）与 main 分支是两条
 # 无共同祖先的独立线。官方管理器 APK 只能由 main 构建——builtin 是只含
 # kernel/ 与 uapi/ 的分支，连 manager/ 目录都没有（本仓库
-# .github/workflows/get-manager.yml:171-176 已记录这一点）。
+# .github/workflows/get-manager.yml:198 已记录这一点）。
 #
 # 管理器在 managerUAPIVersion > kernelUAPIVersion 时判定 requiresNewKernel，
 # 首页报「需要更新内核」（上游 userspace 侧 Natives.kt 的比对逻辑）。
@@ -66,7 +70,8 @@ if [ -z "$KSU_UAPI_URL" ]; then
     Official) KSU_UAPI_URL="https://raw.githubusercontent.com/tiann/KernelSU/main/uapi/supercall.h" ;;
     *)
       # SukiSU 系：main 与 builtin 是两条独立拓扑，UAPI 头路径也不同，按实际检出分支取。
-      _uapi_branch="${KSU_BRANCH_MODE_RESOLVED:-main}"
+      # BRANCH 由 build_kernel.sh 的 resolve_ksu_branch 导出（builtin 系分支名即 builtin）
+      _uapi_branch="${BRANCH:-main}"
       if [ "$_uapi_branch" = "builtin" ] || [ "$_uapi_branch" = "builtin-new" ] || [ "$_uapi_branch" = "builtin-rebase" ]; then
         KSU_UAPI_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${_uapi_branch}/kernel/include/uapi/supercall.h"
       else
@@ -77,7 +82,13 @@ if [ -z "$KSU_UAPI_URL" ]; then
 fi
 UPSTREAM_UAPI_URL="$KSU_UAPI_URL"
 
+# awk 改写用的临时文件路径（为空表示当前没有待清理的临时文件）。
+# die 是硬失败出口，任何一条 die 都必须先把临时文件删掉：否则 mv 失败（只读挂载、
+# 跨设备）后内核树里会残留 *.uapi_tmp，git status 变脏，还可能被
+# collect_conflicts 阶段当成补丁冲突文件收走。
+UAPI_TMP=""
 die() {
+  [ -n "${UAPI_TMP}" ] && rm -f "${UAPI_TMP}"
   echo "::error::SukiSU UAPI 对齐：$*"
   exit 1
 }
@@ -193,10 +204,12 @@ else
 fi
 
 if [ -n "$NEW_LINE" ]; then
+  UAPI_TMP="${UAPI_FILE}.uapi_tmp"
   awk -v n="$ANCHOR" -v line="$NEW_LINE" \
     'NR == n { print; print line; next } { print }' \
-    "$UAPI_FILE" > "${UAPI_FILE}.uapi_tmp" || die "写入临时文件失败"
-  mv "${UAPI_FILE}.uapi_tmp" "$UAPI_FILE" || die "替换 $UAPI_FILE 失败"
+    "$UAPI_FILE" > "$UAPI_TMP" || die "写入临时文件失败"
+  mv "$UAPI_TMP" "$UAPI_FILE" || die "替换 $UAPI_FILE 失败"
+  UAPI_TMP=""
 
   grep -q 'KSU_GET_INFO_FLAG_BUNDLED' "$UAPI_FILE" \
     || die "插入后仍未匹配到 KSU_GET_INFO_FLAG_BUNDLED"

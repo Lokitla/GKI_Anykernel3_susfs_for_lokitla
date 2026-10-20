@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # 用途：上游 SUSFS 闸门健康检查（fail-fast，避免整轮构建空跑）
 #
 # 背景：BakaSU 上游会在 kernel/tools/susfs_compat.mk 末尾追加**无条件**的
@@ -37,7 +38,7 @@ while [ $# -gt 0 ]; do
     --ref)
       [ $# -ge 2 ] || { echo "::error::--ref 缺少取值（用法见 $0 --help）" >&2; exit 2; }
       REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "未知参数: $1（用法见 $0 --help）" >&2; exit 2 ;;
   esac
 done

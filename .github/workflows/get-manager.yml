@@ -37,6 +37,7 @@ on:
         description: "The calculated KSU version number"
         value: ${{ jobs.get_ksu_manager.outputs.ksuVer }}
 
+      # 注意：目前无 caller 消费 managerVer（仅保留声明与透传，删掉需同步改 job 输出）
       managerVer:
         description: "实测下载到的 Manager APK versionCode（cf784f5 下载验证后）"
         value: ${{ jobs.get_ksu_manager.outputs.managerVer }}
@@ -59,7 +60,7 @@ jobs:
       ksuVer: ${{ steps.get_version.outputs.kversion }}
       # 输出2: SUSFS版本号
       susVer: ${{ steps.get_version.outputs.sversion }}
-      # 输出3: Manager 实测版本号
+      # 输出3: Manager 实测版本号（注意：目前无 caller 消费该输出）
       managerVer: ${{ steps.add_KSU.outputs.managerVer }}
       # 输出4: 所选 Manager 构建的提交 SHA（ksu_commit 对齐用）
       ksuCommit: ${{ steps.align_commit.outputs.ksuCommit }}
@@ -73,7 +74,10 @@ jobs:
       KSU_BRANCH_MODE: ${{ inputs.ksu_branch_mode }}
 
     steps:
+      # 纯 echo 调试步骤，生产路径上每次 reusable 调用都会刷一大段 context；
+      # 只在开启 runner 调试日志（ACTIONS_STEP_DEBUG / runner.debug）时执行。
       - name: 🧐 Debug Workflow Caller Context
+        if: runner.debug == '1'
         run: |
           echo "==================== DEBUG CONTEXT ===================="
           echo " "

@@ -10,10 +10,14 @@
 
 name: 构建内核
 
-# 并发控制：同一分支只运行一个实例，新运行会取消旧的
+# 并发控制：同一分支只运行一个实例，但只有人工触发才会取消旧运行。
+# 定时派发（Auto_Trigger_* 每 3 天 cron 调 dispatches）与人工点「Run workflow」
+# 落在同一个 group（同 workflow、同 ref），若无条件 cancel-in-progress，
+# 后到者会直接杀先到者——一次已跑到一半的内核构建被 kill，前半程产物作废、
+# Release 也不会创建。所以取消只对手动触发生效，定时派发的构建跑完为止。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 permissions:
   contents: write
@@ -53,7 +57,7 @@ on:
         type: boolean
         default: true
       use_kpm:
-        description: "KPM 模块支持（编译后修补 Image。6.12 及以上不支持：SukiSU 的 KPM 代码用了新内核已移除的 netlink_kernel_cfg.cb_mutex；6.6 是支持的）"
+        description: "KPM 模块支持（编译后修补 Image。6.12 及以上不支持：SukiSU 的 KPM 代码用了新内核已移除的 netlink_kernel_cfg.cb_mutex；6.6 也不修补 Image，实际可用范围是 SukiSU 系 + 内核 ≤ 6.1；且仅 SukiSU 系提供 KPM）"
         type: choice
         default: "patched (开启并修补)"
         options:
@@ -83,10 +87,6 @@ on:
         required: false
 
       # ==================== 开关（默认开启） ====================
-      build_all:
-        description: "构建全部版本"
-        type: boolean
-        default: true
       export_susfs_patches:
         description: "收集 SUSFS 集成补丁（SukiSU / BakaSU / FinaSU）"
         type: boolean
@@ -693,6 +693,7 @@ jobs:
             "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") KSU_NAME="SukiSU" ;;
             "BakaSU")  KSU_NAME="BakaSU" ;;
             "FinaSU")  KSU_NAME="FinaSU" ;;
+            *) echo "::error::未知的 kernelsu_variant: ${{ inputs.kernelsu_variant }}"; exit 1 ;;
           esac
           echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
 
@@ -759,7 +760,13 @@ jobs:
           failed=0
           check_build() {
             local selected="$1" job_name="$2" result="$3"
-            if [[ "$selected" == "true" && "$result" != "success" && "$result" != "skipped" ]]; then
+            # skipped 不能当通过：空矩阵（选了该目标但本模式无条目）时
+            # build-kernels job 结果为 skipped，若放行会走到创建 Release，
+            # 最终得到一个没有任何产物的空 Release，且 tag 已被占用。
+            if [[ "$selected" == "true" && "$result" == "skipped" ]]; then
+              echo "::warning::选中的构建任务 $job_name 被跳过（多半是空矩阵）"
+              failed=1
+            elif [[ "$selected" == "true" && "$result" != "success" ]]; then
               echo "选中的构建任务 $job_name 失败 (结果: $result)"
               failed=1
             fi
@@ -810,6 +817,7 @@ jobs:
             "SukiSU"|"SukiSU(40726)"|"SukiSU(40548)") REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"; REPO_URL2="SukiSU-Ultra/SukiSU-Ultra" ;;
             "BakaSU") REPO_URL="https://github.com/Baka-SU/BakaSU.git"; REPO_URL2="Baka-SU/BakaSU" ;;
             "FinaSU") REPO_URL="https://github.com/LyraVoid/FinaSU.git"; REPO_URL2="LyraVoid/FinaSU" ;;
+            *) echo "::error::未知的 kernelsu_variant: ${{ inputs.kernelsu_variant }}"; exit 1 ;;
           esac
 
           if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] && [ -f "config/config" ]; then
@@ -1032,9 +1040,13 @@ jobs:
           # --paginate 是必要的：单页只有 100 个 tag，交叉发布下窗口不够。
           # pipeline 末尾的 || true 不可省：gh 调用失败或 grep 无匹配时，
           # 在 Actions 的 bash -e -o pipefail 下会让整个步骤失败。
+          # SUS_VERSION 形如 v2.1.0，点号在 ERE 里匹配任意字符；先转义成 \.
+          # 再进 grep -E / sed -E，否则 v2x1y0-r3-<变体> 也会被算进同一版本序列，
+          # 导致 tag 序号跳号。
+          SUS_VERSION_RE="${SUS_VERSION//./\\.}"
           LATEST_N=$(gh api --paginate "repos/$REPO_OWNER/$REPO_NAME/tags?per_page=100" --jq -r '.[].name' 2>/dev/null \
-            | grep -E "^${SUS_VERSION}-r[0-9]+-${VARIANT_SLUG}$" \
-            | sed -E "s/^${SUS_VERSION}-r([0-9]+)-${VARIANT_SLUG}$/\1/" \
+            | grep -E "^${SUS_VERSION_RE}-r[0-9]+-${VARIANT_SLUG}$" \
+            | sed -E "s/^${SUS_VERSION_RE}-r([0-9]+)-${VARIANT_SLUG}$/\1/" \
             | sort -n | tail -1 || true)
 
           if [ -z "$LATEST_N" ]; then
@@ -1059,10 +1071,14 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
 
+          # --verify-tag：--target 传 SHA 时 gh 会自行创建 tag，若 NEW_TAG 已存在
+          # （并发或重跑）行为随 gh 版本而异；显式校验 tag 已存在则直接失败，
+          # 而不是静默把产物挂到别人的 Release 上。
           gh release create "$NEW_TAG" \
             --title "$RELEASE_NAME" \
             --notes-file release_body.md \
             --target "$GITHUB_SHA" \
+            --verify-tag \
             $PRERELEASE_FLAG
 
       # ==================== 上传管理器和模块 ====================
@@ -1099,6 +1115,7 @@ jobs:
 
       # ==================== 上传内核产物 ====================
       - name: 上传内核产物
+        continue-on-error: true
         run: |
           for file in ./downloaded-artifacts/*_kernel-*/*; do
             [ -d "$file" ] && continue

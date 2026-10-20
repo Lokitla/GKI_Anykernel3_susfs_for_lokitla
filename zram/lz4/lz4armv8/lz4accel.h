@@ -1,3 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * lz4accel.h - ARM64 NEON LZ4 decompression accel interface
+ *
+ * Copyright (C) Huawei Technologies Co., Ltd.
+ * Derived from the Huawei EROFS in-kernel LZ4 NEON decompression code.
+ * Source and licensing are recorded in NOTICE ("zram/lz4/lz4armv8" entry).
+ */
+
 #include <linux/types.h>
 #include <asm/simd.h>
 

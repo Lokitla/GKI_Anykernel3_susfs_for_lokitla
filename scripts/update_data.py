@@ -11,7 +11,7 @@ import os
 import time
 
 from gki_fetch import (
-    TARGETS, DATA_DIR,
+    TARGETS,
     make_date_range, get_end_date,
     fetch_makefile, fetch_lts, fetch_refs, refresh_refs,
     parse_version, json_path,
