@@ -56,6 +56,72 @@ patch_needs_context_include() {
     "$SUSFS_PATCH"
 }
 
+# 同一目标还有第三种差异：补丁自己把这一行当"新增行"写进 hunk（=树里不必须有它）。
+patch_adds_context_include() {
+  local inc="$1" target="$2"
+  awk -v want="#include <$inc>" -v tgt="+++ b/$target" '
+    index($0, "+++ b/") == 1 { cur = ($0 == tgt); next }
+    cur && substr($0, 1, 1) == "+" && substr($0, 2) == want { found = 1 }
+    END { exit found ? 0 : 1 }' \
+    "$SUSFS_PATCH"
+}
+
+# 在 anchor 行（整行字面量）的下一行插入 line。
+insert_line_after() {
+  local file="$1" anchor="$2" line="$3" esc
+  esc=$(printf '%s' "$anchor" | sed 's/[][\.^$*\/&]/\\&/g')
+  sed -i "/^$esc\$/a $line" "$file"
+}
+
+# 按整行字面量删除，写回原文件（保留 inode 与权限）。
+delete_line_literal() {
+  local file="$1" line="$2" tmp
+  tmp=$(mktemp)
+  grep -vxF "$line" "$file" > "$tmp" || true
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# 打补丁前把"补丁代际与月度树不一致"的 include 摆平，打完补丁再逐条还原。
+# 少一行 → hunk 上下文失配；多一行 → 同样整段失配
+# （a14 6.1 的 fs/namespace.c hunk1 就是这个形态：月度树里有 trace/hooks/blk.h，
+#  而钉住的补丁代际生成时还没有它，于是 hunk1 因多出一行被拒）。
+# 两个方向都要处理，且必须是临时改动（编译前还原），不能改变树的行为。
+CONTEXT_INC_UNDO=()
+
+adjust_context_include() {
+  local file="$1" inc="$2" anchor="$3" line
+  line="#include <$inc>"
+  local wants_ctx=0 wants_add=0 has=0
+  patch_needs_context_include "$inc" "$file" && wants_ctx=1
+  patch_adds_context_include "$inc" "$file" && wants_add=1
+  grep -qF "$line" "$file" && has=1
+  if [ "$wants_ctx" = "1" ] && [ "$has" = "0" ]; then
+    echo "临时补入 $file 的 $line（补丁以它作 hunk 上下文，树里缺这一行）"
+    insert_line_after "$file" "$anchor" "$line"
+    CONTEXT_INC_UNDO+=("add|$file|$anchor|$line")
+  elif [ "$wants_ctx" = "0" ] && [ "$wants_add" = "0" ] && [ "$has" = "1" ]; then
+    echo "临时移除 $file 的 $line（补丁代际不认识它，留着会让 hunk 上下文多一行而失配）"
+    delete_line_literal "$file" "$line"
+    CONTEXT_INC_UNDO+=("del|$file|$anchor|$line")
+  else
+    echo "上下文 include 无需调整：$file 的 $line（补丁上下文=${wants_ctx} 补丁新增=${wants_add} 树里有=${has}）"
+  fi
+}
+
+restore_context_includes() {
+  local rec mode file anchor line
+  [ "${#CONTEXT_INC_UNDO[@]}" -gt 0 ] || return 0
+  for rec in "${CONTEXT_INC_UNDO[@]}"; do
+    IFS='|' read -r mode file anchor line <<< "$rec"
+    case "$mode" in
+      add) echo "还原 $file 的临时 include（删除 $line）"; delete_line_literal "$file" "$line" ;;
+      del) echo "还原 $file 被临时移除的 include（补回 $line）"; insert_line_after "$file" "$anchor" "$line" ;;
+    esac
+  done
+  CONTEXT_INC_UNDO=()
+}
+
 echo "应用 SUSFS 补丁..."
 
 SUSFS_PATCH="50_add_susfs_in_gki-$ANDROID_VERSION-$KERNEL_VERSION.patch"
@@ -263,22 +329,12 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     fi
     adjust_legacy_fdinfo_context
   fi
-  # 只有"接管式"补丁的 hunk 上下文才假定 namespace.c 里有 trace/hooks/blk.h、
-  # task_mmu.c 里有 trace/hooks/mm.h；固定提交的旧代际补丁并不依赖它们
-  # （a13 gen1 的 hunk1 上下文里根本没有 blk.h）。所以先问补丁要不要，再决定补不补——
-  # 无条件补入会让旧代际补丁的上下文多一行而整段失配。
-  if patch_needs_context_include "trace/hooks/blk.h" "fs/namespace.c" \
-    && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-    echo "临时补入 Android 13 5.15 namespace.c 的 trace/hooks/blk.h 上下文"
-    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-    NS_BLK_H_ADDED=1
-  fi
-  if patch_needs_context_include "trace/hooks/mm.h" "fs/proc/task_mmu.c" \
-    && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
-    echo "临时补入 Android 13 5.15 task_mmu.c 的 trace/hooks/mm.h 上下文"
-    sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
-    TM_MM_H_ADDED=1
-  fi
+  # namespace.c 的 trace/hooks/blk.h、task_mmu.c 的 trace/hooks/mm.h 在不同
+  # 补丁代际里"要/不要"是反的：接管式代际把它们当 hunk 上下文（树里必须有），
+  # 旧代际（a13 gen1）的上下文里根本没有它们（树里多一行反而整段失配）。
+  # 所以交给 adjust_context_include：按补丁自己说不说，缺了补、多了临时删。
+  adjust_context_include fs/namespace.c trace/hooks/blk.h '#include "internal.h"'
+  adjust_context_include fs/proc/task_mmu.c trace/hooks/mm.h '#include <linux/pkeys.h>'
 fi
 
 if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
@@ -290,12 +346,9 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "临时调整 Android 14 6.1 dma-buf.h 上下文"
     sed -i '/^#include <linux\/cpufreq_times.h>$/a #include <linux/dma-buf.h>' fs/proc/base.c
   fi
-  if patch_needs_context_include "trace/hooks/blk.h" "fs/namespace.c" \
-    && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-    echo "临时补入 Android 14 6.1 namespace.c 的 trace/hooks/blk.h 上下文"
-    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-    NS_BLK_H_ADDED=1
-  fi
+  # 月度树的 namespace.c 里有 trace/hooks/blk.h，而钉住的补丁代际的 hunk1 上下文
+  # 生成时还没有它 → 树里多这一行会让 hunk1 整段被拒（a14 39367266799 的失败面）。
+  adjust_context_include fs/namespace.c trace/hooks/blk.h '#include "internal.h"'
 fi
 
 if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
@@ -310,14 +363,9 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
 fi
 
 if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  # 补丁 hunk 的上下文里有 fs/exec.c 的 #include <linux/dma-buf.h>，
-  # 而 android16-6.12 的月度树在 ksm.h 之后并没有这一行；缺失时临时补入。
-  if patch_needs_context_include "linux/dma-buf.h" "fs/exec.c" \
-    && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
-    echo "临时补入 Android 16 6.12 exec.c 的 dma-buf.h 上下文"
-    sed -i '/^#include <linux\/ksm.h>$/a #include <linux/dma-buf.h>' fs/exec.c
-    EXEC_DMABUF_ADDED=1
-  fi
+  # 有的补丁代际把 fs/exec.c 的 #include <linux/dma-buf.h> 当 hunk 上下文，
+  # 有的代际没有；两个方向都由 adjust_context_include 按补丁自身判定。
+  adjust_context_include fs/exec.c linux/dma-buf.h '#include <linux/ksm.h>'
 fi
 
 # 新版内核在 super.c 的 internal.h 之后新增了 trace/hooks/fs.h，
@@ -507,6 +555,20 @@ if [ "$SUSFS_REJ_COUNT" -gt 0 ]; then
   else
     echo "::error title=SUSFS 补丁冲突::有 ${SUSFS_REJ_COUNT} 处 hunk 未应用（列出如下）。确认可忽略时设 ALLOW_SUSFS_REJ=1"
     printf '%s\n' "${SUSFS_REJ_FILES[@]}"
+    # 月度树与补丁代际的差异常常只落在一行 include 上，而日志里只有补丁期望的样子、
+    # 看不到树实际的样子，失败一次就得再猜一轮。这里把现场直接打出来：
+    # 冲突文件自身的 include 列表 + 补丁期望的 hunk 内容（.rej 原样）。
+    for rej_src in "${SUSFS_REJ_FILES[@]}"; do
+      dump_src="${rej_src%.rej}"
+      echo "--- 冲突现场：$dump_src 的 include 列表 ---"
+      if [ -f "$dump_src" ]; then
+        grep -n '^#include' "$dump_src" | head -40
+      else
+        echo "（$dump_src 不存在）"
+      fi
+      echo "--- 补丁期望的该文件 hunk（$rej_src）---"
+      head -60 "$rej_src"
+    done
     exit 1
   fi
 fi
@@ -631,6 +693,10 @@ if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
   fi
 fi
 
+# 打补丁前的临时 include 调整（补入或移除）在这里统一还原；
+# 必须在补丁落地之后、编译之前，保证源码树最终与月度树一致。
+restore_context_includes
+
 if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
   if [[ "$CURRENT_SUB" -le 41 ]]; then
     echo "还原 Android 13 5.15 临时调整"
@@ -639,14 +705,6 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     restore_legacy_fdinfo_context
     sed -i 's|i_uid_into_mnt(i_user_ns(&fi->inode), &fi->inode).val|i_uid_into_mnt(\&init_user_ns, \&fi->inode).val|g' fs/susfs.c
     sed -i 's|i_uid_into_mnt(i_user_ns(inode), inode).val|i_uid_into_mnt(\&init_user_ns, inode).val|g' fs/susfs.c
-  fi
-  if [[ -n "${NS_BLK_H_ADDED:-}" ]]; then
-    echo "还原 Android 13 5.15 namespace.c 临时补入"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-  fi
-  if [[ -n "${TM_MM_H_ADDED:-}" ]]; then
-    echo "还原 Android 13 5.15 task_mmu.c 临时补入"
-    sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
   fi
 fi
 
@@ -658,10 +716,6 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "还原 Android 14 6.1 base.c 临时调整"
     sed -i '/^#include <linux\/dma-buf.h>$/d' fs/proc/base.c
   fi
-  if [[ -n "${NS_BLK_H_ADDED:-}" ]]; then
-    echo "还原 Android 14 6.1 namespace.c 临时补入"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-  fi
 fi
 
 if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
@@ -672,13 +726,6 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
   if [[ "$CURRENT_SUB" -le 57 ]]; then
     echo "还原 Android 15 6.6 memory.c 临时调整"
     sed -i '/^#include <linux\/zswap.h>$/d' mm/memory.c
-  fi
-fi
-
-if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ -n "${EXEC_DMABUF_ADDED:-}" ]]; then
-    echo "还原 Android 16 6.12 exec.c 临时补入"
-    sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
   fi
 fi
 
