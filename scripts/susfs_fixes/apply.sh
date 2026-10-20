@@ -248,10 +248,19 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     fi
     adjust_legacy_fdinfo_context
   fi
-  if [[ "$OS_PATCH_LEVEL" == "lts" ]]; then
-    echo "临时调整 Android 13 5.15 LTS 头文件上下文"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-    sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
+  # 上游补丁的 hunk 上下文假定 namespace.c 里有 trace/hooks/blk.h、
+  # task_mmu.c 里有 trace/hooks/mm.h，但 AOSP 各月度分支的 namespace.c
+  # 实际都没有 blk.h（该头文件只在 android16-6.12 起存在）。缺就临时补入，
+  # 打完补丁再删掉（末尾还原段），否则这两个 hunk 会整段失配。
+  if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
+    echo "临时补入 Android 13 5.15 namespace.c 的 trace/hooks/blk.h 上下文"
+    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
+    NS_BLK_H_ADDED=1
+  fi
+  if ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+    echo "临时补入 Android 13 5.15 task_mmu.c 的 trace/hooks/mm.h 上下文"
+    sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
+    TM_MM_H_ADDED=1
   fi
 fi
 
@@ -264,9 +273,10 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "临时调整 Android 14 6.1 dma-buf.h 上下文"
     sed -i '/^#include <linux\/cpufreq_times.h>$/a #include <linux/dma-buf.h>' fs/proc/base.c
   fi
-  if [[ "$CURRENT_SUB" -ge 157 ]]; then
-    echo "临时调整 Android 14 6.1 namespace.c 上下文"
-    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+  if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
+    echo "临时补入 Android 14 6.1 namespace.c 的 trace/hooks/blk.h 上下文"
+    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
+    NS_BLK_H_ADDED=1
   fi
 fi
 
@@ -282,9 +292,12 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
 fi
 
 if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]]; then
-    echo "临时调整 Android 16 6.12 exec.c 上下文"
-    sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
+  # 补丁 hunk 的上下文里有 fs/exec.c 的 #include <linux/dma-buf.h>，
+  # 而 android16-6.12 的月度树在 ksm.h 之后并没有这一行；缺失时临时补入。
+  if ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
+    echo "临时补入 Android 16 6.12 exec.c 的 dma-buf.h 上下文"
+    sed -i '/^#include <linux\/ksm.h>$/a #include <linux/dma-buf.h>' fs/exec.c
+    EXEC_DMABUF_ADDED=1
   fi
 fi
 
@@ -608,14 +621,13 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     sed -i 's|i_uid_into_mnt(i_user_ns(&fi->inode), &fi->inode).val|i_uid_into_mnt(\&init_user_ns, \&fi->inode).val|g' fs/susfs.c
     sed -i 's|i_uid_into_mnt(i_user_ns(inode), inode).val|i_uid_into_mnt(\&init_user_ns, inode).val|g' fs/susfs.c
   fi
-  if [[ "$OS_PATCH_LEVEL" == "lts" ]]; then
-    echo "还原 Android 13 5.15 LTS 头文件上下文"
-    if ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-      sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-    fi
-    if ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
-      sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
-    fi
+  if [[ -n "${NS_BLK_H_ADDED:-}" ]]; then
+    echo "还原 Android 13 5.15 namespace.c 临时补入"
+    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+  fi
+  if [[ -n "${TM_MM_H_ADDED:-}" ]]; then
+    echo "还原 Android 13 5.15 task_mmu.c 临时补入"
+    sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
   fi
 fi
 
@@ -627,9 +639,9 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "还原 Android 14 6.1 base.c 临时调整"
     sed -i '/^#include <linux\/dma-buf.h>$/d' fs/proc/base.c
   fi
-  if [[ "$CURRENT_SUB" -ge 157 ]] && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
-    echo "还原 Android 14 6.1 namespace.c 临时调整"
-    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
+  if [[ -n "${NS_BLK_H_ADDED:-}" ]]; then
+    echo "还原 Android 14 6.1 namespace.c 临时补入"
+    sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
   fi
 fi
 
@@ -645,9 +657,9 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
 fi
 
 if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]] && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
-    echo "还原 Android 16 6.12 exec.c 临时调整"
-    sed -i '0,/^#include /s//#include <linux\/dma-buf.h>\n&/' fs/exec.c
+  if [[ -n "${EXEC_DMABUF_ADDED:-}" ]]; then
+    echo "还原 Android 16 6.12 exec.c 临时补入"
+    sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
   fi
 fi
 
