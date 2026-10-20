@@ -695,6 +695,51 @@ stage_clone_susfs() {
     fi
   fi
 
+  # 变体内置钉住表：SukiSU 系在未显式指定提交时，钉到「补丁形态与 builtin
+  # KernelSU 符号集能对上」的上游提交，而不是分支最新。
+  #
+  # 为什么必须钉：susfs4ksu 在 2026-10-18/19 把 SELinux 部分改成「接管式」模型——
+  # 内核补丁不再自带 static my_setprocattr / my_write_context / my_write_access
+  # 的实现，改成 extern 引用 KernelSU 侧导出，并新增 ksu_setup_preinit_file /
+  # ksu_preinit_handle_post_execveat。而 SukiSU 的 builtin 分支（开 SUSFS 时走的那条）
+  # 只有 165 行的 selinux_hide.c，既不导出这些符号也没有 preinit 目录，于是链接期固定报
+  #   undefined symbol: my_setprocattr / my_write_context / my_write_access
+  #   undefined symbol: ksu_setup_preinit_file / ksu_preinit_handle_post_execveat
+  # 矩阵里 a13/a14/a15 三条 SukiSU 全红都是这一个原因，与内核源码无关。
+  #
+  # 选型判据只有一条：该提交的 50_add_susfs 补丁自带 my_* / my_security_* 定义
+  # （static 或非 static 都行），且它 extern 的东西 builtin 恰好都有
+  # （fake_state 仅 <6.6 有；fake_status / fake_status_initialize_key /
+  # initialize_fake_status / ksu_selinux_hide_enabled|running / backup_sepolicy 各版本都有）。
+  #   a12/a13/a14 用各自 gen1（需 fake_state + 自带 static my_*，无 with_policy 依赖）
+  #   a15 用 gen2 自持版（自带非 static my_security_*，不碰 fake_state / with_policy）
+  #   a16 只有 simonpunk 有分支，用同形态的 gen2 自持版
+  # 显式 SUSFS_COMMIT 与环境变量 SUSFS_PIN_TIME 的优先级仍高于本表（见上方分支）。
+  # 若上游之后把这些提交删了（force push），checkout_susfs_commit 会失败并让整轮构建
+  # 红掉——这是有意的：宁可红，也不要静默编出一个缺符号的内核。
+  if [ -z "${SUSFS_PIN_TIME:-}" ] && [ -z "$LEGACY_SUKISU_CONFIG" ] && [ -z "${SUSFS_COMMIT:-}" ]; then
+    SUSFS_CUSTOM_OFF=1
+    if [ -f "config/config" ] && [ "$(grep "^custom=" config/config | cut -d'=' -f2)" == "true" ]; then
+      SUSFS_CUSTOM_OFF=0
+    fi
+    if [ "$SUSFS_CUSTOM_OFF" == "1" ]; then
+      case "${KSU_VARIANT}:${SUSFS_BRANCH}" in
+        SukiSU:gki-android12-5.10) SUSFS_PIN="6dc93089a0cedfec3d31739e747231f99d751e9e" ;;
+        SukiSU:gki-android13-5.15) SUSFS_PIN="e95584432759ebe28e020e7c459ddc7da32eeba6" ;;
+        SukiSU:gki-android14-6.1)  SUSFS_PIN="357d43f13ea2d2bcff709fb63a8dbac76e1ebd64" ;;
+        SukiSU:gki-android15-6.6)  SUSFS_PIN="afb39173a6cc9f188093e7c8b71b709fc40f6565" ;;
+        SukiSU:gki-android16-6.12) SUSFS_PIN="bd2756895e557f339b6304b57e4de131868ea429" ;;
+        *) SUSFS_PIN="" ;;
+      esac
+      if [ -n "$SUSFS_PIN" ]; then
+        echo "SUSFS 变体钉住: ${KSU_VARIANT} + ${SUSFS_BRANCH} -> ${SUSFS_PIN}"
+        checkout_susfs_commit "$SUSFS_PIN" || {
+          echo "::error::SUSFS 钉住提交不可用: ${SUSFS_PIN}（上游可能已 force push，需更新 scripts/build_kernel.sh 的钉住表）"
+          cd "$_pwd"; return 1
+        }
+      fi
+    fi
+  fi
   cd "$_pwd"
 }
 
