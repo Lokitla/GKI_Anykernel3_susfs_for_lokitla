@@ -12,7 +12,7 @@
 
 **Automated Android GKI kernel builds with KernelSU and SUSFS**
 
-[![Release](https://img.shields.io/github/v/release/Lokitla/GKI_SUKISU_SUSFS_for_Lokita?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/releases)
+[![Release](https://img.shields.io/github/v/release/Lokitla/GKI_Anykernel3_susfs_for_lokitla?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/releases)
 [![KernelSU](https://img.shields.io/badge/KernelSU-Supported-5AA300?style=flat-square)](https://kernelsu.org/)
 [![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-E67E22?style=flat-square)](https://gitlab.com/simonpunk/susfs4ksu)
 
@@ -76,11 +76,11 @@ It is an **unofficial derivative project maintained for the author's own use**. 
 
 | Topic | Link |
 |---|---|
-| Build artifacts | [Releases](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/releases) |
+| Build artifacts | [Releases](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/releases) |
 | Local builds | [docs/local-build-en.md](docs/local-build-en.md) |
 | Feature details | [docs/advanced-features-en.md](docs/advanced-features-en.md) |
-| Device and kernel lookup | [Project pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/) |
-| Beginner guide | [GitHub Pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/guide.html) |
+| Device and kernel lookup | [Project pages](https://lokitla.github.io/GKI_Anykernel3_susfs_for_lokitla/) |
+| Beginner guide | [GitHub Pages](https://lokitla.github.io/GKI_Anykernel3_susfs_for_lokitla/guide.html) |
 | Sources and licensing | [NOTICE](NOTICE) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) · [LICENSE](LICENSE) · [LICENSE-GPL-3.0.txt](LICENSE-GPL-3.0.txt) |
 | Upstream integration log | [FUSION.md](FUSION.md) |
 
@@ -368,7 +368,7 @@ The root `LICENSE` is GPL-2.0 and **covers only original material here**; the Fi
 
 This is a personal project and **no response time or fix is promised**. If you still want to file something:
 
-- Use [Issues](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/issues) and include the full Actions run link or log excerpt;
+- Use [Issues](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/issues) and include the full Actions run link or log excerpt;
 - State the kernel version, Android version, variant, and key inputs such as `enable_susfs` / `use_kpm` / `droidspaces`;
 - For behaviour that belongs to an upstream (SUSFS, KernelSU, AnyKernel3, …), please report it upstream first.
 

@@ -80,7 +80,7 @@ jobs:
 
   deploy-pages:
     # 原为硬编码上游仓库，fork 后 Pages 部署永不执行；改为当前仓库即可
-    if: ${{ contains(fromJSON('["zzh20188/GKI_KernelSU_SUSFS", "Lokitla/GKI_SUKISU_SUSFS_for_Lokita"]'), github.repository) }}
+    if: ${{ contains(fromJSON('["zzh20188/GKI_KernelSU_SUSFS", "Lokitla/GKI_Anykernel3_susfs_for_lokitla"]'), github.repository) }}
     needs: update-data
     runs-on: ubuntu-24.04
     env:

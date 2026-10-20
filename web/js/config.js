@@ -30,7 +30,7 @@ export var SUSFS_COMPAT_MIN = {
 // 外部链接
 // [本地化] repo 指回本 fork；其余指向 AOSP / SUSFS 上游，属于数据源而非归属，保持不动
 export var LINKS = {
-  repo: 'https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita',
+  repo: 'https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla',
   susfs: 'https://gitlab.com/simonpunk/susfs4ksu',
   aospCommon: 'https://android.googlesource.com/kernel/common',
   aospManifest: 'https://android.googlesource.com/kernel/manifest',

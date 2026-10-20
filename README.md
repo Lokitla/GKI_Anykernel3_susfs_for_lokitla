@@ -12,7 +12,7 @@
 
 **Android GKI 内核自动化构建，集成 KernelSU 与 SUSFS**
 
-[![Release](https://img.shields.io/github/v/release/Lokitla/GKI_SUKISU_SUSFS_for_Lokita?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/releases)
+[![Release](https://img.shields.io/github/v/release/Lokitla/GKI_Anykernel3_susfs_for_lokitla?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/releases)
 [![KernelSU](https://img.shields.io/badge/KernelSU-Supported-5AA300?style=flat-square)](https://kernelsu.org/)
 [![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-E67E22?style=flat-square)](https://gitlab.com/simonpunk/susfs4ksu)
 
@@ -76,11 +76,11 @@
 
 | 内容 | 链接 |
 |---|---|
-| 构建产物 | [Releases](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/releases) |
+| 构建产物 | [Releases](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/releases) |
 | 本地构建 | [docs/local-build.md](docs/local-build.md) |
 | 功能说明 | [docs/advanced-features.md](docs/advanced-features.md) |
-| 设备与内核版本查询 | [项目页面](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/) |
-| 新手指南 | [GitHub Pages](https://lokitla.github.io/GKI_SUKISU_SUSFS_for_Lokita/guide.html) |
+| 设备与内核版本查询 | [项目页面](https://lokitla.github.io/GKI_Anykernel3_susfs_for_lokitla/) |
+| 新手指南 | [GitHub Pages](https://lokitla.github.io/GKI_Anykernel3_susfs_for_lokitla/guide.html) |
 | 来源与许可 | [NOTICE](NOTICE) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) · [LICENSE](LICENSE) · [LICENSE-GPL-3.0.txt](LICENSE-GPL-3.0.txt) |
 | 上游整合记录 | [FUSION.md](FUSION.md) |
 
@@ -368,7 +368,7 @@ FinaSU 未接入定时触发，需要时手动运行构建入口。SUSFS 补丁�
 
 本仓库为个人自用项目，**不承诺响应时间或修复**。若仍要提交，请：
 
-- 使用 [Issues](https://github.com/Lokitla/GKI_SUKISU_SUSFS_for_Lokita/issues)，并附上完整的 Actions 运行链接或日志片段；
+- 使用 [Issues](https://github.com/Lokitla/GKI_Anykernel3_susfs_for_lokitla/issues)，并附上完整的 Actions 运行链接或日志片段；
 - 说明内核版本、Android 版本、变体、`enable_susfs` / `use_kpm` / `droidspaces` 等关键输入；
 - 涉及上游行为的问题（SUSFS、KernelSU、AnyKernel3 等）请优先到对应上游反馈。
 

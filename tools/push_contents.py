@@ -19,7 +19,7 @@ import subprocess
 import sys
 import urllib.request
 
-OWNER, REPO = "Lokitla", "GKI_SUKISU_SUSFS_for_Lokita"
+OWNER, REPO = "Lokitla", "GKI_Anykernel3_susfs_for_lokitla"
 
 if len(sys.argv) < 4:
     print("用法: python tools/push_contents.py <branch> <path> <local_commit> [message]",
