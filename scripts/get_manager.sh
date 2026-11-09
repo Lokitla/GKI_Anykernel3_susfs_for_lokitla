@@ -399,8 +399,13 @@ CANDIDATE_BASE="/tmp/manager_candidates_$$"
 mkdir -p "$CANDIDATE_BASE"
 
 # 将下载列表写入临时文件（用 printf %b 保留 tab 和换行）
+# 结尾必须补 \n：$(...) 会吃掉 jq 输出末尾的换行，若列表只有一行（例如上游该次
+# 构建只产出 Manager-release），文件就成了「无换行结尾的单行」，而
+# `while IFS= read -r` 遇到无换行结尾的最后一行会直接返回非 0 —— 循环体一次都不
+# 执行，最后落到「未找到任何有效 Manager APK」。2026-11-01 起管理器持续缺失就是
+# 这个原因（候选构建 41207077584 只有 Manager-release 一个匹配产物）。
 DOWNLOAD_LIST_FILE="/tmp/download_list_$$.txt"
-printf '%b' "$DOWNLOAD_LIST" > "$DOWNLOAD_LIST_FILE"
+printf '%b\n' "$DOWNLOAD_LIST" > "$DOWNLOAD_LIST_FILE"
 
 FETCHED=0
 MATCHED=0
@@ -408,7 +413,9 @@ BEST_ACTUAL=0
 BEST_DIR=""
 
 # 下载并验证每个候选 APK
-while IFS= read -r LINE; do
+# || [ -n "$LINE" ]：兜住「最后一行没有换行结尾」的情况，read 在 EOF 返回非 0
+# 但变量已赋值；条件里补一条判断，循环体才不会整段被跳过（见上方写入处的说明）。
+while IFS= read -r LINE || [ -n "$LINE" ]; do
   # 跳过空行
   [ -z "$LINE" ] && continue
   

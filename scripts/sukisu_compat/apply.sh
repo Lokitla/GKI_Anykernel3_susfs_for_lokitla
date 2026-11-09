@@ -68,8 +68,14 @@ for SUPER_CAND in "$KSU_DIR/kernel/extension/kpm/super_access.c" \
   fi
 done
 if [ -n "$SUPER_FILE" ]; then
-  if grep -q 'KERNEL_VERSION(6, 11, 0)' "$SUPER_FILE"; then
-    echo "super_access.c 已包含 cb_mutex 版本守卫，跳过"
+  # 上游 2026-11 起把 cb_mutex 成员改成用编译期探测宏 KSU_NETLINK_CFG_HAS_CB_MUTEX
+  # 包裹（宏由 KernelSU 的 kernel/Kbuild 按目标内核头文件 sed 探测后 -D 注入，
+  # 同批还有 KSU_NETLINK_CFG_HAS_COMPARE）。这套写法比 LINUX_VERSION_CODE 守卫更准，
+  # 我们的补丁已无意义；若仍按「没有 KERNEL_VERSION(6, 11, 0) 就打补丁」处理，
+  # 会因上下文不匹配 hunk FAILED 而 fail()，导致所有 SukiSU 变体构建整体失败。
+  if grep -q 'KERNEL_VERSION(6, 11, 0)' "$SUPER_FILE" \
+     || grep -q 'KSU_NETLINK_CFG_HAS_CB_MUTEX' "$SUPER_FILE"; then
+    echo "super_access.c 已包含 cb_mutex 守卫（版本宏或上游编译期探测宏），跳过"
   else
     echo "应用 cb_mutex 兼容补丁 (6.11+ 移除 netlink_kernel_cfg.cb_mutex)..."
     # 补丁的 hunk 头按 kernel/kpm/ 写死；命中 extension/kpm/ 时先改写路径再打。
