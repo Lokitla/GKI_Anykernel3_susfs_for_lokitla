@@ -3473,6 +3473,18 @@ stage_config_susfs() {
     echo "已导出 SUSFS 配置片段: $(wc -l < "$WORKSPACE/susfs-patch/susfs.config") 行"
   fi
 
+  # SukiSU builtin 2026-11 起无条件调用 SUSFS 的 priority-uid-filter API
+  # （susfs_parse_priority_app_strings / CMD_SUSFS_SET_PRIORITY_UID_FILTER /
+  # susfs_set_priority_uid_filter）。这些符号只由「带 priority uid filter 的
+  # SUSFS」提供，钉住的 SUSFS 提交没有，于是所有 SukiSU 变体在 ksu_main.o 阶段红。
+  # 裁剪判据是「已打上 SUSFS 的头里有没有该 API」，只能放在 apply_susfs 之后，
+  # 不能塞进 apply_sukisu_compat（那个阶段 SUSFS 还没落地）。
+  if [ -f "$WORKSPACE/scripts/sukisu_compat/trim_priority_filter.sh" ]; then
+    KERNEL_ROOT="$KERNEL_ROOT" bash "$WORKSPACE/scripts/sukisu_compat/trim_priority_filter.sh" KernelSU || return 1
+  else
+    echo "::warning::未找到 scripts/sukisu_compat/trim_priority_filter.sh，跳过 priority-uid-filter 裁剪"
+  fi
+
 }
 
 # 条件执行（等价原工作流 if:）

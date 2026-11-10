@@ -9,9 +9,13 @@
 #      android16-6.12 GKI 编译报 -Wincompatible-pointer-types（-Werror）；
 #   2) kernel/kpm/super_access.c 引用 netlink_kernel_cfg.cb_mutex，
 #      该成员在 Linux 6.11 被上游移除，KPM 开启时 6.11+ 内核编译失败。
-#
 # 两组修复均以 LINUX_VERSION_CODE 守卫，6.10 及以下内核编译结果不变；
 # 上游自行修复后 grep 检测会自动跳过，重复执行幂等。
+#
+# 注意：priority-uid-filter 集成的裁剪**不在**本脚本里——它要求的判据是
+# 「目标内核的 include/linux/susfs.h 是否提供该 API」，而本阶段跑在
+# apply_susfs 之前，此时 SUSFS 还没落地。该逻辑见
+# scripts/sukisu_compat/trim_priority_filter.sh，由 config_susfs 阶段调用。
 #
 # 用法: apply.sh [KernelSU 目录]（调用方工作目录需为 $KERNEL_ROOT）
 
