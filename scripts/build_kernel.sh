@@ -375,22 +375,22 @@ stage_show_config() {
 
 run_show_config() { stage_show_config "$@"; }
 
-# runner 的 ubuntu 归档源偶发整体不可达（2026-11-11 一轮两条构建都卡在
-# security.ubuntu.com 超时，整阶段 install_deps 失败）。apt 自带的重试只覆盖单次
-# 下载，不会重跑整条命令，所以这里包一层：三次尝试 + 抬高单请求超时，仍失败才
-# 判定依赖装不上。
+# runner 的 ubuntu 归档源与 DNS 偶发整体不可用（2026-11-11 一轮 14:46–15:19Z 连续
+# 30 分钟 Temporary failure resolving，两条构建都卡在 install_deps）。apt 自带的重试
+# 只覆盖单次下载，不会重跑整条命令；默认 30 秒超时会让一次 DNS 故障白白耗掉九分钟。
+# 所以这里包一层：12 秒短超时 + 强制 IPv4 + 五次尝试，失败也只用几十秒一轮。
 apt_retry() {
   local attempt
-  for attempt in 1 2 3; do
-    if sudo apt-get -o Acquire::Retries=3 \
-        -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@"; then
+  for attempt in 1 2 3 4 5; do
+    if sudo apt-get -o Acquire::Retries=2 -o Acquire::ForceIPv4=true \
+        -o Acquire::http::Timeout=12 -o Acquire::https::Timeout=12 "$@"; then
       return 0
     fi
-    if [ "$attempt" -eq 3 ]; then
+    if [ "$attempt" -eq 5 ]; then
       return 1
     fi
-    echo "::warning::apt-get $1 第 ${attempt} 次失败（runner 镜像源抖动），20 秒后重试"
-    sleep 20
+    echo "::warning::apt-get $1 第 ${attempt} 次失败（runner 归档源/DNS 抖动），40 秒后重试"
+    sleep 40
   done
 }
 
@@ -399,8 +399,21 @@ stage_install_deps() {
   # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
   # 错误要等到编译期才以「找不到 bison / flex」的形式暴露，排查成本极高。
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
-  apt_retry update \
-    || { echo "::error::apt-get update 失败，编译依赖无法安装"; return 1; }
+  # runner 镜像自带大部分依赖，全量 install 会把无关包也拉一遍、放大网络故障的影响面，
+  # 所以先按 dpkg 记录算出真正缺的那几个，只装缺的。
+  local -a wanted=(ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4)
+  local -a missing=()
+  local pkg
+  for pkg in "${wanted[@]}"; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "编译依赖已齐全（${#wanted[@]} 项），跳过 apt 安装"
+    return 0
+  fi
+  echo "缺少编译依赖: ${missing[*]}"
+  # 索引更新失败不致命：runner 里已有可用索引，直接尝试安装仍可能成功。
+  apt_retry update || echo "::warning::apt-get update 失败，沿用 runner 自带索引继续安装"
   # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
   #
   # 但它**不能**消除日志里那条
@@ -412,8 +425,21 @@ stage_install_deps() {
   # enabled!"，稍后内核正规流程 GEN security/selinux/flask.h，再出现
   # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
   # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
-  apt_retry install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
-    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; return 1; }
+  if ! apt_retry install -y "${missing[@]}"; then
+    # 归档源整体不可用时（DNS 解析失败等）不把整条构建钉死在这里：先把编译真正
+    # 必需的几项单独核一遍，缺到必需项才终止；只缺 ccache/dwarves 这类可选件就放行。
+    local -a essential=(build-essential binutils libssl-dev libelf-dev bison flex)
+    local -a miss_ess=()
+    local e
+    for e in "${essential[@]}"; do
+      dpkg -s "$e" >/dev/null 2>&1 || miss_ess+=("$e")
+    done
+    if [ "${#miss_ess[@]}" -gt 0 ]; then
+      echo "::error::安装编译依赖失败，且仍缺必需项: ${miss_ess[*]}（runner 归档源很可能不可用，稍后重派）"
+      return 1
+    fi
+    echo "::warning::安装部分可选依赖失败（${missing[*]}，runner 归档源抖动），必需项齐全，继续构建"
+  fi
 
 }
 
