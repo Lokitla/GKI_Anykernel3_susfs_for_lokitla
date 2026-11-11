@@ -27,6 +27,30 @@ list_untracked_rej() {
     <(list_upstream_rej | sort)
 }
 
+# ---- priority uid filter 的 Kconfig 开关归一化（跟随上游 ling 2026-11-03）----
+# 上游 susfs4ksu 2026-11-02 起把 getpriority/priority uid filter 整套代码（含
+# susfs_switch_to_ksu_domain / susfs_restore_creds 两个辅助函数）收进
+# CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER 开关，但 SukiSU(builtin)/BakaSU/FinaSU 的
+# 原生驱动 Kconfig 都没有这个选项，而 SukiSU 驱动侧又无条件调用
+# susfs_set_priority_uid_filter / susfs_parse_priority_app_strings，于是：
+#   - 声明被裁掉，驱动侧报 -Wimplicit-function-declaration；
+#   - 定义没人调用，clang -Werror,-Wunused-function 又中断编译。
+# 把开关上提为 CONFIG_KSU_SUSFS（启用 SUSFS 时恒为 y），特性完整可用；
+# 只改预处理指令行，susfs.c 里 copy_config_to_buf() 的字符串字面量保持原名，
+# 管理器仍能按 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER 识别该特性。
+normalize_priority_uid_filter_guard() {
+  local f
+  if [ -f "$SUSFS_PATCH" ] \
+    && grep -q 'CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER' "$SUSFS_PATCH"; then
+    sed -i -E '/^[+ ]*#[[:space:]]*(ifdef|ifndef|endif).*CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/ s/CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/CONFIG_KSU_SUSFS/' "$SUSFS_PATCH"
+  fi
+  for f in fs/susfs.c include/linux/susfs.h common/fs/susfs.c common/include/linux/susfs.h; do
+    [ -f "$f" ] || continue
+    grep -q 'CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER' "$f" || continue
+    sed -i -E '/^#[[:space:]]*(ifdef|ifndef|endif).*CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/ s/CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/CONFIG_KSU_SUSFS/' "$f"
+  done
+}
+
 # patch 退出码：0=全部应用，1=部分/全部 hunk 被跳过（--forward 下表示已应用过），
 # >=2=真正的失败。把「已应用过」当成成功，其余一律终止构建。
 apply_patch_checked() {
@@ -137,6 +161,10 @@ fi
 cp "$SUSFS4KSU/kernel_patches/$SUSFS_PATCH" ./common/
 cp "$SUSFS4KSU"/kernel_patches/fs/* ./common/fs/
 cp "$SUSFS4KSU"/kernel_patches/include/linux/* ./common/include/linux/
+
+# 补丁与源码里的 priority uid filter 开关先归一到 CONFIG_KSU_SUSFS，避免驱动侧
+# 因 Kconfig 缺项而隐式声明 / 未使用函数（这两个错误在 SukiSU builtin 上是必现的）
+normalize_priority_uid_filter_guard
 
 case "$KSU_VARIANT" in
   "Official")
@@ -383,6 +411,14 @@ fi
 # SUSFS 主补丁必须完整应用。默认遇到补丁拒绝即终止构建；只有显式设置
 # ALLOW_SUSFS_REJ=1 时才允许保留 .rej 并继续。
 apply_patch_checked "SUSFS 主补丁" "$SUSFS_PATCH"
+
+# 主补丁落地后再归一一次（此时 fs/susfs.c 与 include/linux/susfs.h 已在树里）
+normalize_priority_uid_filter_guard
+# 万一某些变体的驱动并不调用这两个辅助函数，静态函数会触发 -Wunused-function
+if [ -f fs/susfs.c ] \
+  && grep -qE '^static (struct cred \*|void )susfs_(switch_to_ksu_domain|restore_creds)\(' fs/susfs.c; then
+  sed -i -E 's/^static (struct cred \*|void )(susfs_switch_to_ksu_domain|susfs_restore_creds)\(/static __maybe_unused (/' fs/susfs.c
+fi
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
