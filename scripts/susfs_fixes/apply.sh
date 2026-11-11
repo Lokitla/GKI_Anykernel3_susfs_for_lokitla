@@ -482,9 +482,10 @@ apply_patch_checked "SUSFS 主补丁" "$SUSFS_PATCH"
 normalize_priority_uid_filter_guard
 # 这里刻意不加 __maybe_unused（zzh 74d069a5b 的做法）：归一之后 priority uid filter
 # 的整段实现与调用点受同一个 CONFIG_KSU_SUSFS 控制，两个 cred 辅助函数一定有调用方，
-# 不会被 -Wunused-function 抓到。反过来给它们前插 __maybe_unused 反而有坑：11-11 实测
-# 在 runner 上 sed 反向引用被当八进制转义，把签名替换成控制字符，a15 的 fs/susfs.c:185
-# 与 :219 直接 expected identifier or '('。
+# 不会被 -Wunused-function 抓到。反过来给它们前插 __maybe_unused 反而有坑：11-11 移植时
+# 用 python 字符串写这条 sed，\1\2 在生成脚本时被吃成 0x01/0x02 控制字符，a15 的
+# fs/susfs.c:185 与 :219 于是变成 static __maybe_unused <控制字符>(...)，报
+# expected identifier or '('。要写这条 sed 请用逐字符字面量，别用反向引用。
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
