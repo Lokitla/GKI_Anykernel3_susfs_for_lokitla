@@ -899,6 +899,20 @@ except Exception:
     fi
   }
 
+  # 超时被 timeout 杀掉后，repo sync 的断点续传偶发留下「目录在、文件不全」的
+  # project。kleaf 目录存在却没有 BUILD.bazel 就是这种半检出的铁证：bazel 加载
+  # 阶段会直接报 "Every .bzl file must have a corresponding package"，编译必挂。
+  # 只校验 BUILD.bazel（Bazel 包标识），不校验具体 .bzl 文件——旧分支的 kleaf
+  # 目录本就不含较晚才加入的脚本，逐个校验会误报（ling 的教训）。
+  incomplete_kleaf_projects() {
+    local kleaf_dir
+    for kleaf_dir in prebuilts/clang/host/linux-x86/kleaf build/kernel/kleaf; do
+      if [ -d "$KERNEL_ROOT/$kleaf_dir" ] && [ ! -f "$KERNEL_ROOT/$kleaf_dir/BUILD.bazel" ]; then
+        echo "${kleaf_dir%/kleaf}"
+      fi
+    done
+  }
+
   attempt=1
   while :; do
     echo "第 $attempt/$MAX_ATTEMPTS 次初始化并同步，分支: common-${FORMATTED_BRANCH}（单次超时 $SYNC_TIMEOUT）"
@@ -914,8 +928,23 @@ except Exception:
       [ "$attempt" -gt 1 ] && SYNC_FLAGS="$SYNC_FLAGS --force-sync"
       timeout -k 60 "$SYNC_TIMEOUT" $REPO sync $SYNC_FLAGS || rc=$?
       if [ "$rc" -eq 0 ]; then
-        echo "内核源码同步成功（第 $attempt 次）"
-        break
+        local incomplete
+        incomplete="$(incomplete_kleaf_projects)"
+        if [ -n "$incomplete" ]; then
+          echo "::warning title=repo sync 完整性守卫::检出不完整（kleaf 缺 BUILD.bazel）: $(printf '%s' "$incomplete" | tr '\n' ' ')；就地重同步这些 project"
+          local proj
+          while IFS= read -r proj; do
+            [ -n "$proj" ] || continue
+            timeout -k 60 10m $REPO sync -c --force-sync --fail-fast "$proj" || echo "::warning title=repo sync 完整性守卫::重同步 $proj 失败"
+          done <<< "$incomplete"
+          incomplete="$(incomplete_kleaf_projects)"
+        fi
+        if [ -z "$incomplete" ]; then
+          echo "内核源码同步成功（第 $attempt 次）"
+          break
+        fi
+        echo "::warning::重同步后检出不完整仍未修复（$(printf '%s' "$incomplete" | tr '\n' ' ')），按同步失败重试"
+        rc=1
       fi
       if [ "$rc" -eq 124 ]; then
         echo "repo sync 超时（$SYNC_TIMEOUT）"
