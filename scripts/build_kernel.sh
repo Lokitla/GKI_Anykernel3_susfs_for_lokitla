@@ -375,12 +375,31 @@ stage_show_config() {
 
 run_show_config() { stage_show_config "$@"; }
 
+# runner 的 ubuntu 归档源偶发整体不可达（2026-11-11 一轮两条构建都卡在
+# security.ubuntu.com 超时，整阶段 install_deps 失败）。apt 自带的重试只覆盖单次
+# 下载，不会重跑整条命令，所以这里包一层：三次尝试 + 抬高单请求超时，仍失败才
+# 判定依赖装不上。
+apt_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if sudo apt-get -o Acquire::Retries=3 \
+        -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@"; then
+      return 0
+    fi
+    if [ "$attempt" -eq 3 ]; then
+      return 1
+    fi
+    echo "::warning::apt-get $1 第 ${attempt} 次失败（runner 镜像源抖动），20 秒后重试"
+    sleep 20
+  done
+}
+
 stage_install_deps() {
   log_stage "install_deps" "安装编译依赖"
   # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
   # 错误要等到编译期才以「找不到 bison / flex」的形式暴露，排查成本极高。
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
-  sudo apt-get update \
+  apt_retry update \
     || { echo "::error::apt-get update 失败，编译依赖无法安装"; return 1; }
   # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
   #
@@ -393,7 +412,7 @@ stage_install_deps() {
   # enabled!"，稍后内核正规流程 GEN security/selinux/flask.h，再出现
   # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
   # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
-  sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
+  apt_retry install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
     || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; return 1; }
 
 }
