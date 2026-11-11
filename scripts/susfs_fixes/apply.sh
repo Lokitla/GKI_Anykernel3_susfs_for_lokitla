@@ -480,11 +480,11 @@ apply_patch_checked "SUSFS 主补丁" "$SUSFS_PATCH"
 
 # 主补丁落地后再归一一次（此时 fs/susfs.c 与 include/linux/susfs.h 已在树里）
 normalize_priority_uid_filter_guard
-# 万一某些变体的驱动并不调用这两个辅助函数，静态函数会触发 -Wunused-function
-if [ -f fs/susfs.c ] \
-  && grep -qE '^static (struct cred \*|void )susfs_(switch_to_ksu_domain|restore_creds)\(' fs/susfs.c; then
-  sed -i -E 's/^static (struct cred \*|void )(susfs_switch_to_ksu_domain|susfs_restore_creds)\(/static __maybe_unused (/' fs/susfs.c
-fi
+# 这里刻意不加 __maybe_unused（zzh 74d069a5b 的做法）：归一之后 priority uid filter
+# 的整段实现与调用点受同一个 CONFIG_KSU_SUSFS 控制，两个 cred 辅助函数一定有调用方，
+# 不会被 -Wunused-function 抓到。反过来给它们前插 __maybe_unused 反而有坑：11-11 实测
+# 在 runner 上 sed 反向引用被当八进制转义，把签名替换成控制字符，a15 的 fs/susfs.c:185
+# 与 :219 直接 expected identifier or '('。
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
