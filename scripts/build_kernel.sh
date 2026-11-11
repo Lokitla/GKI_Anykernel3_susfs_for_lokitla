@@ -394,6 +394,30 @@ apt_retry() {
   done
 }
 
+# GitHub 的 ubuntu-24.04 镜像通过 /etc/apt/apt-mirrors.txt 把归档源指向
+# azure.archive.ubuntu.com；该域名在个别 runner 上会连续几十分钟解析失败
+# （2026-11-11 15:36–16:00Z 实测），于是 update/install 全线 Ign→Err。
+# 先做一次 DNS 预检：解析正常就照原样走；只有它解析不了、而 archive.ubuntu.com
+# 能解析时才把源改到后者（archive 带 main/universe，够装这些构建依赖）；
+# 两个域名都不通就在 10 秒内终止，让重派变成几秒钟的事，而不是白等半小时。
+apt_dns_preflight() {
+  local f
+  if timeout 8 getent hosts azure.archive.ubuntu.com >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::azure.archive.ubuntu.com 解析失败（runner DNS 故障）"
+  if ! timeout 8 getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+    echo "::error title=runner DNS 不可用::azure/archive 归档源均无法解析，本机 DNS 故障，直接终止以免空耗；稍后重派即可"
+    return 1
+  fi
+  echo "azure 归档源不可达，改用 archive.ubuntu.com"
+  for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] || continue
+    sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$f" 2>/dev/null || true
+  done
+  return 0
+}
+
 stage_install_deps() {
   log_stage "install_deps" "安装编译依赖"
   # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
@@ -412,6 +436,8 @@ stage_install_deps() {
     return 0
   fi
   echo "缺少编译依赖: ${missing[*]}"
+  # 依赖不全会走网络：先确认 runner 的 DNS/归档源可用，别等到 40 秒 × 5 轮之后才发现
+  apt_dns_preflight || return 1
   # 索引更新失败不致命：runner 里已有可用索引，直接尝试安装仍可能成功。
   apt_retry update || echo "::warning::apt-get update 失败，沿用 runner 自带索引继续安装"
   # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
