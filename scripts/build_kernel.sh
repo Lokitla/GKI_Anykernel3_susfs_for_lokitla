@@ -1219,6 +1219,19 @@ stage_resolve_ksu_branch() {
     fi
   fi
 
+  # SukiSU builtin 稳定性钉住（2026-11-11）：builtin HEAD 850149efa 的
+  # 「SELinux generation tracking」回移带两处笔误，任何内核都编译不过——
+  # kernel/selinux/rules.c:19 写成 selinux_status_update_policyload(seqno0)
+  # （应为 seqno；只在 >= 6.4 的分支命中，所以只砸 6.6/6.12），:194 写成
+  # policydb->latest_granting（应为 db->latest_granting，所有版本命中）。
+  # 实测 android15-6.6 与 android12-5.10 的 SukiSU 变体都在 compile_kernel
+  # 阶段硬红（run 43015190312 / 43015207651），且 main 分支同位置代码正确。
+  # 钉到最后一个可编译的 builtin 提交 1cfa57340（v4.3.0-r2）；上游修好后把
+  # 这里的 SHA 换掉即可，临时想跟 HEAD 就显式传 SUKISU_COMMIT 覆盖。
+  if [ "$variant_input" = "SukiSU" ] && [ -z "$SUKISU_COMMIT" ] && [ -z "$PINNED_COMMIT" ]; then
+    BRANCH="1cfa57340590971cba7521ed536da8ebbedc5f0a"
+    echo "SukiSU 钉住提交: 1cfa57340（builtin HEAD 850149efa 的 rules.c 有上游笔误，待其修复）"
+  fi
   # KernelSU-Next 的 dev 分支没有 KSU_SUSFS_* 开关，勾了 SUSFS 只会走到
   # verify_susfs_kconfig 抛"未声明 N/N 个 SUSFS 开关"，看不出是变体选错了。
   # 这里提前拦掉，并直说该换哪个变体。
