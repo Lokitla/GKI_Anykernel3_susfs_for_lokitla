@@ -685,6 +685,15 @@ stage_clone_susfs() {
   #   undefined symbol: ksu_setup_preinit_file / ksu_preinit_handle_post_execveat
   # 矩阵里 a13/a14/a15 三条 SukiSU 全红都是这一个原因，与内核源码无关。
   #
+
+  # 2026-11-10 刷新：钉住表整体前移到 2026-11-09「KernelSU: Sync with upstream」那批提交。
+  # SukiSU builtin 41168 起，kernel/selinux/sepolicy.c 直接引用 susfs_add_sus_type /
+  # susfs_add_sus_avd_allowed_by_type（自己写 extern，所以只会在 ld.lld 阶段报
+  # undefined symbol），supercall/dispatch.c 与 manager/pkg_observer.c 还引用
+  # priority-uid-filter API。这批符号由 kernel_patches/fs/susfs.c + include/linux/
+  # susfs.h 提供（apply.sh 会整份拷贝，不依赖 50_add 补丁里有没有），旧 pin（v2.3.0
+  # 那批）完全没有，于是 a12 在 SELinux 改写校验、a15 在链接期各自红掉。
+  # 上下两条 a12/a15 失败的日志见 run 42779345992 / 42779185624。
   # 选型判据只有一条：该提交的 50_add_susfs 补丁自带 my_* / my_security_* 定义
   # （static 或非 static 都行），且它 extern 的东西 builtin 恰好都有
   # （fake_state 仅 <6.6 有；fake_status / fake_status_initialize_key /
@@ -702,11 +711,11 @@ stage_clone_susfs() {
     fi
     if [ "$SUSFS_CUSTOM_OFF" == "1" ]; then
       case "${KSU_VARIANT}:${SUSFS_BRANCH}" in
-        SukiSU:gki-android12-5.10) SUSFS_PIN="6dc93089a0cedfec3d31739e747231f99d751e9e" ;;
-        SukiSU:gki-android13-5.15) SUSFS_PIN="e95584432759ebe28e020e7c459ddc7da32eeba6" ;;
-        SukiSU:gki-android14-6.1)  SUSFS_PIN="357d43f13ea2d2bcff709fb63a8dbac76e1ebd64" ;;
-        SukiSU:gki-android15-6.6)  SUSFS_PIN="afb39173a6cc9f188093e7c8b71b709fc40f6565" ;;
-        SukiSU:gki-android16-6.12) SUSFS_PIN="bd2756895e557f339b6304b57e4de131868ea429" ;;
+        SukiSU:gki-android12-5.10) SUSFS_PIN="5436438b5cc77f146e04f71070da153dabe17a9d" ;;
+        SukiSU:gki-android13-5.15) SUSFS_PIN="fe943d15ec6a1891f7a360bf210589bdffe4e318" ;;
+        SukiSU:gki-android14-6.1)  SUSFS_PIN="69b8e734920b8f9ed885ab8d112969719698e242" ;;
+        SukiSU:gki-android15-6.6)  SUSFS_PIN="ec03d0c73b821afa1d5037d6d493216f59744fcb" ;;
+        SukiSU:gki-android16-6.12) SUSFS_PIN="395a8c0c88d348e9fe7c14f66a456fde4653287c" ;;
         *) SUSFS_PIN="" ;;
       esac
       if [ -n "$SUSFS_PIN" ]; then
