@@ -131,7 +131,7 @@ on:
           - "builtin"
         default: "auto"
       manager_commit:
-        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0=只锁管理器与内核；0,def456=只锁 SUSFS。BakaSU+SUSFS 时第 2 段须填 c06d5f8ef2b5（新版 SUSFS 要求 KSU 导出符号，BakaSU 未跟进）"
+        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0 或 0,def456"
         required: false
         type: string
         default: ""
@@ -228,7 +228,7 @@ on:
         type: string
         default: "auto"
       manager_commit:
-        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0=只锁管理器与内核；0,def456=只锁 SUSFS。BakaSU+SUSFS 时第 2 段须填 c06d5f8ef2b5（新版 SUSFS 要求 KSU 导出符号，BakaSU 未跟进）"
+        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0 或 0,def456"
         required: false
         type: string
         default: ""
