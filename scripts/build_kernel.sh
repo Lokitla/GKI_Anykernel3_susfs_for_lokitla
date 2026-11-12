@@ -375,13 +375,71 @@ stage_show_config() {
 
 run_show_config() { stage_show_config "$@"; }
 
+# runner 的 ubuntu 归档源与 DNS 偶发整体不可用（2026-11-11 一轮 14:46–15:19Z 连续
+# 30 分钟 Temporary failure resolving，两条构建都卡在 install_deps）。apt 自带的重试
+# 只覆盖单次下载，不会重跑整条命令；默认 30 秒超时会让一次 DNS 故障白白耗掉九分钟。
+# 所以这里包一层：12 秒短超时 + 强制 IPv4 + 五次尝试，失败也只用几十秒一轮。
+apt_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if sudo apt-get -o Acquire::Retries=2 -o Acquire::ForceIPv4=true \
+        -o Acquire::http::Timeout=12 -o Acquire::https::Timeout=12 "$@"; then
+      return 0
+    fi
+    if [ "$attempt" -eq 5 ]; then
+      return 1
+    fi
+    echo "::warning::apt-get $1 第 ${attempt} 次失败（runner 归档源/DNS 抖动），40 秒后重试"
+    sleep 40
+  done
+}
+
+# GitHub 的 ubuntu-24.04 镜像通过 /etc/apt/apt-mirrors.txt 把归档源指向
+# azure.archive.ubuntu.com；该域名在个别 runner 上会连续几十分钟解析失败
+# （2026-11-11 15:36–16:00Z 实测），于是 update/install 全线 Ign→Err。
+# 先做一次 DNS 预检：解析正常就照原样走；只有它解析不了、而 archive.ubuntu.com
+# 能解析时才把源改到后者（archive 带 main/universe，够装这些构建依赖）；
+# 两个域名都不通就在 10 秒内终止，让重派变成几秒钟的事，而不是白等半小时。
+apt_dns_preflight() {
+  local f
+  if timeout 8 getent hosts azure.archive.ubuntu.com >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::azure.archive.ubuntu.com 解析失败（runner DNS 故障）"
+  if ! timeout 8 getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+    echo "::error title=runner DNS 不可用::azure/archive 归档源均无法解析，本机 DNS 故障，直接终止以免空耗；稍后重派即可"
+    return 1
+  fi
+  echo "azure 归档源不可达，改用 archive.ubuntu.com"
+  for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] || continue
+    sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$f" 2>/dev/null || true
+  done
+  return 0
+}
+
 stage_install_deps() {
   log_stage "install_deps" "安装编译依赖"
   # 本阶段由 `if ! run_xxx` 调度，errexit 在该上下文下被抑制：apt 失败不会中止，
   # 错误要等到编译期才以「找不到 bison / flex」的形式暴露，排查成本极高。
   # 装依赖失败绝不能继续，所以逐条显式检查退出码。
-  sudo apt-get update \
-    || { echo "::error::apt-get update 失败，编译依赖无法安装"; return 1; }
+  # runner 镜像自带大部分依赖，全量 install 会把无关包也拉一遍、放大网络故障的影响面，
+  # 所以先按 dpkg 记录算出真正缺的那几个，只装缺的。
+  local -a wanted=(ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4)
+  local -a missing=()
+  local pkg
+  for pkg in "${wanted[@]}"; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "编译依赖已齐全（${#wanted[@]} 项），跳过 apt 安装"
+    return 0
+  fi
+  echo "缺少编译依赖: ${missing[*]}"
+  # 依赖不全会走网络：先确认 runner 的 DNS/归档源可用，别等到 40 秒 × 5 轮之后才发现
+  apt_dns_preflight || return 1
+  # 索引更新失败不致命：runner 里已有可用索引，直接尝试安装仍可能成功。
+  apt_retry update || echo "::warning::apt-get update 失败，沿用 runner 自带索引继续安装"
   # binutils 提供 ld/ar/objcopy 等基础工具，属内核构建常规依赖，这里显式声明。
   #
   # 但它**不能**消除日志里那条
@@ -393,8 +451,21 @@ stage_install_deps() {
   # enabled!"，稍后内核正规流程 GEN security/selinux/flask.h，再出现
   # "-- Baseband-guard: flask.h found, skip generation"），实测不影响最终产物
   # （Run 39316853173 / 39319060336 均 success，镜像 38061188 字节）。
-  sudo apt-get install -y ccache python3 git curl build-essential binutils libssl-dev bison flex libelf-dev dwarves lz4 \
-    || { echo "::error::安装编译依赖失败（ccache/python3/git/binutils/bison/flex/lz4 等）"; return 1; }
+  if ! apt_retry install -y "${missing[@]}"; then
+    # 归档源整体不可用时（DNS 解析失败等）不把整条构建钉死在这里：先把编译真正
+    # 必需的几项单独核一遍，缺到必需项才终止；只缺 ccache/dwarves 这类可选件就放行。
+    local -a essential=(build-essential binutils libssl-dev libelf-dev bison flex)
+    local -a miss_ess=()
+    local e
+    for e in "${essential[@]}"; do
+      dpkg -s "$e" >/dev/null 2>&1 || miss_ess+=("$e")
+    done
+    if [ "${#miss_ess[@]}" -gt 0 ]; then
+      echo "::error::安装编译依赖失败，且仍缺必需项: ${miss_ess[*]}（runner 归档源很可能不可用，稍后重派）"
+      return 1
+    fi
+    echo "::warning::安装部分可选依赖失败（${missing[*]}，runner 归档源抖动），必需项齐全，继续构建"
+  fi
 
 }
 
@@ -685,6 +756,15 @@ stage_clone_susfs() {
   #   undefined symbol: ksu_setup_preinit_file / ksu_preinit_handle_post_execveat
   # 矩阵里 a13/a14/a15 三条 SukiSU 全红都是这一个原因，与内核源码无关。
   #
+
+  # 2026-11-10 刷新：钉住表整体前移到 2026-11-09「KernelSU: Sync with upstream」那批提交。
+  # SukiSU builtin 41168 起，kernel/selinux/sepolicy.c 直接引用 susfs_add_sus_type /
+  # susfs_add_sus_avd_allowed_by_type（自己写 extern，所以只会在 ld.lld 阶段报
+  # undefined symbol），supercall/dispatch.c 与 manager/pkg_observer.c 还引用
+  # priority-uid-filter API。这批符号由 kernel_patches/fs/susfs.c + include/linux/
+  # susfs.h 提供（apply.sh 会整份拷贝，不依赖 50_add 补丁里有没有），旧 pin（v2.3.0
+  # 那批）完全没有，于是 a12 在 SELinux 改写校验、a15 在链接期各自红掉。
+  # 上下两条 a12/a15 失败的日志见 run 42779345992 / 42779185624。
   # 选型判据只有一条：该提交的 50_add_susfs 补丁自带 my_* / my_security_* 定义
   # （static 或非 static 都行），且它 extern 的东西 builtin 恰好都有
   # （fake_state 仅 <6.6 有；fake_status / fake_status_initialize_key /
@@ -702,11 +782,11 @@ stage_clone_susfs() {
     fi
     if [ "$SUSFS_CUSTOM_OFF" == "1" ]; then
       case "${KSU_VARIANT}:${SUSFS_BRANCH}" in
-        SukiSU:gki-android12-5.10) SUSFS_PIN="6dc93089a0cedfec3d31739e747231f99d751e9e" ;;
-        SukiSU:gki-android13-5.15) SUSFS_PIN="e95584432759ebe28e020e7c459ddc7da32eeba6" ;;
-        SukiSU:gki-android14-6.1)  SUSFS_PIN="357d43f13ea2d2bcff709fb63a8dbac76e1ebd64" ;;
-        SukiSU:gki-android15-6.6)  SUSFS_PIN="afb39173a6cc9f188093e7c8b71b709fc40f6565" ;;
-        SukiSU:gki-android16-6.12) SUSFS_PIN="bd2756895e557f339b6304b57e4de131868ea429" ;;
+        SukiSU:gki-android12-5.10) SUSFS_PIN="5436438b5cc77f146e04f71070da153dabe17a9d" ;;
+        SukiSU:gki-android13-5.15) SUSFS_PIN="fe943d15ec6a1891f7a360bf210589bdffe4e318" ;;
+        SukiSU:gki-android14-6.1)  SUSFS_PIN="69b8e734920b8f9ed885ab8d112969719698e242" ;;
+        SukiSU:gki-android15-6.6)  SUSFS_PIN="ec03d0c73b821afa1d5037d6d493216f59744fcb" ;;
+        SukiSU:gki-android16-6.12) SUSFS_PIN="395a8c0c88d348e9fe7c14f66a456fde4653287c" ;;
         *) SUSFS_PIN="" ;;
       esac
       if [ -n "$SUSFS_PIN" ]; then
@@ -819,6 +899,20 @@ except Exception:
     fi
   }
 
+  # 超时被 timeout 杀掉后，repo sync 的断点续传偶发留下「目录在、文件不全」的
+  # project。kleaf 目录存在却没有 BUILD.bazel 就是这种半检出的铁证：bazel 加载
+  # 阶段会直接报 "Every .bzl file must have a corresponding package"，编译必挂。
+  # 只校验 BUILD.bazel（Bazel 包标识），不校验具体 .bzl 文件——旧分支的 kleaf
+  # 目录本就不含较晚才加入的脚本，逐个校验会误报（ling 的教训）。
+  incomplete_kleaf_projects() {
+    local kleaf_dir
+    for kleaf_dir in prebuilts/clang/host/linux-x86/kleaf build/kernel/kleaf; do
+      if [ -d "$KERNEL_ROOT/$kleaf_dir" ] && [ ! -f "$KERNEL_ROOT/$kleaf_dir/BUILD.bazel" ]; then
+        echo "${kleaf_dir%/kleaf}"
+      fi
+    done
+  }
+
   attempt=1
   while :; do
     echo "第 $attempt/$MAX_ATTEMPTS 次初始化并同步，分支: common-${FORMATTED_BRANCH}（单次超时 $SYNC_TIMEOUT）"
@@ -834,8 +928,23 @@ except Exception:
       [ "$attempt" -gt 1 ] && SYNC_FLAGS="$SYNC_FLAGS --force-sync"
       timeout -k 60 "$SYNC_TIMEOUT" $REPO sync $SYNC_FLAGS || rc=$?
       if [ "$rc" -eq 0 ]; then
-        echo "内核源码同步成功（第 $attempt 次）"
-        break
+        local incomplete
+        incomplete="$(incomplete_kleaf_projects)"
+        if [ -n "$incomplete" ]; then
+          echo "::warning title=repo sync 完整性守卫::检出不完整（kleaf 缺 BUILD.bazel）: $(printf '%s' "$incomplete" | tr '\n' ' ')；就地重同步这些 project"
+          local proj
+          while IFS= read -r proj; do
+            [ -n "$proj" ] || continue
+            timeout -k 60 10m $REPO sync -c --force-sync --fail-fast "$proj" || echo "::warning title=repo sync 完整性守卫::重同步 $proj 失败"
+          done <<< "$incomplete"
+          incomplete="$(incomplete_kleaf_projects)"
+        fi
+        if [ -z "$incomplete" ]; then
+          echo "内核源码同步成功（第 $attempt 次）"
+          break
+        fi
+        echo "::warning::重同步后检出不完整仍未修复（$(printf '%s' "$incomplete" | tr '\n' ' ')），按同步失败重试"
+        rc=1
       fi
       if [ "$rc" -eq 124 ]; then
         echo "repo sync 超时（$SYNC_TIMEOUT）"
@@ -1210,6 +1319,19 @@ stage_resolve_ksu_branch() {
     fi
   fi
 
+  # SukiSU builtin 稳定性钉住（2026-11-11）：builtin HEAD 850149efa 的
+  # 「SELinux generation tracking」回移带两处笔误，任何内核都编译不过——
+  # kernel/selinux/rules.c:19 写成 selinux_status_update_policyload(seqno0)
+  # （应为 seqno；只在 >= 6.4 的分支命中，所以只砸 6.6/6.12），:194 写成
+  # policydb->latest_granting（应为 db->latest_granting，所有版本命中）。
+  # 实测 android15-6.6 与 android12-5.10 的 SukiSU 变体都在 compile_kernel
+  # 阶段硬红（run 43015190312 / 43015207651），且 main 分支同位置代码正确。
+  # 钉到最后一个可编译的 builtin 提交 1cfa57340（v4.3.0-r2）；上游修好后把
+  # 这里的 SHA 换掉即可，临时想跟 HEAD 就显式传 SUKISU_COMMIT 覆盖。
+  if [ "$variant_input" = "SukiSU" ] && [ -z "$SUKISU_COMMIT" ] && [ -z "$PINNED_COMMIT" ]; then
+    BRANCH="1cfa57340590971cba7521ed536da8ebbedc5f0a"
+    echo "SukiSU 钉住提交: 1cfa57340（builtin HEAD 850149efa 的 rules.c 有上游笔误，待其修复）"
+  fi
   # KernelSU-Next 的 dev 分支没有 KSU_SUSFS_* 开关，勾了 SUSFS 只会走到
   # verify_susfs_kconfig 抛"未声明 N/N 个 SUSFS 开关"，看不出是变体选错了。
   # 这里提前拦掉，并直说该换哪个变体。
@@ -3471,6 +3593,18 @@ stage_config_susfs() {
   if [ "$SUSFS_PATCH_EXPORT" = "true" ] && [ -d "$WORKSPACE/susfs-patch" ]; then
     tail -n +$((LINES_BEFORE + 1)) "$DEFCONFIG" > "$WORKSPACE/susfs-patch/susfs.config"
     echo "已导出 SUSFS 配置片段: $(wc -l < "$WORKSPACE/susfs-patch/susfs.config") 行"
+  fi
+
+  # SukiSU builtin 2026-11 起无条件调用 SUSFS 的 priority-uid-filter API
+  # （susfs_parse_priority_app_strings / CMD_SUSFS_SET_PRIORITY_UID_FILTER /
+  # susfs_set_priority_uid_filter）。这些符号只由「带 priority uid filter 的
+  # SUSFS」提供，钉住的 SUSFS 提交没有，于是所有 SukiSU 变体在 ksu_main.o 阶段红。
+  # 裁剪判据是「已打上 SUSFS 的头里有没有该 API」，只能放在 apply_susfs 之后，
+  # 不能塞进 apply_sukisu_compat（那个阶段 SUSFS 还没落地）。
+  if [ -f "$WORKSPACE/scripts/sukisu_compat/trim_priority_filter.sh" ]; then
+    KERNEL_ROOT="$KERNEL_ROOT" bash "$WORKSPACE/scripts/sukisu_compat/trim_priority_filter.sh" KernelSU || return 1
+  else
+    echo "::warning::未找到 scripts/sukisu_compat/trim_priority_filter.sh，跳过 priority-uid-filter 裁剪"
   fi
 
 }

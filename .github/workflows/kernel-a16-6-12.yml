@@ -25,14 +25,14 @@ on:
         description: "集成 SUSFS"
         required: false
         type: boolean
-        default: true
+        default: false
       # 6.12 上 KPM 恒不生效，默认关闭以免"勾了却空转"：
       # build_kernel.sh 在内核 >= 6.10 时强制 KPM_SUPPORTED=0
       # （SukiSU 的 drivers/kernelsu/kpm/super_access.c 用了 6.10+ 已移除的
       #  netlink_kernel_cfg.cb_mutex，编译必失败），相关阶段全部跳过。
       # 注意描述里不能写"6.6 不支持"——6.6 是支持的，不支持的是 6.12 及以上。
       use_kpm:
-        description: "KPM 模块支持（编译后修补 Image。6.12 及以上不支持：SukiSU 的 KPM 代码用了新内核已移除的 netlink_kernel_cfg.cb_mutex）"
+        description: "KPM 模块支持（仅 SukiSU 系 + 内核 ≤ 6.1 真正生效，BakaSU/FinaSU 不提供 KPM）"
         required: true
         type: choice
         default: "disabled (关闭)"
@@ -89,7 +89,7 @@ on:
         description: "启用网络增强（IPSet + BBR + FQ 队列 + IPv6 NAT + 附加拥塞算法）"
         required: false
         type: boolean
-        default: false
+        default: true
       skip_incompatible:
         description: "可选功能不兼容或失败时自动跳过，而非中断构建（SUSFS 与一加 8E 除外）"
         required: false
@@ -124,7 +124,7 @@ on:
         description: "用 GitHub Release 存储 ccache"
         required: false
         type: boolean
-        default: false
+        default: true
       ksu_branch_mode:
         description: "SukiSU 拉取分支：auto=跟随SUSFS开关自动选 / main=纯管理器分支 / builtin=内核内置实现（仅 SukiSU 生效）"
         required: false
@@ -135,7 +135,7 @@ on:
           - "builtin"
         default: "auto"
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定。FinaSU 始终对齐官方 Release"
+        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0 或 0,def456"
         required: false
         type: string
         default: ""
@@ -171,7 +171,7 @@ on:
         description: "启用网络增强（IPSet + BBR + FQ 队列 + IPv6 NAT + 附加拥塞算法）"
         required: false
         type: boolean
-        default: false
+        default: true
       skip_incompatible:
         description: "可选功能不兼容或失败时自动跳过，而非中断构建（SUSFS 与一加 8E 除外）"
         required: false
@@ -189,7 +189,7 @@ on:
         description: "集成 SUSFS"
         required: false
         type: boolean
-        default: true
+        default: false
       supp_op:
         required: false
         type: boolean
@@ -225,14 +225,14 @@ on:
         description: "用 GitHub Release 存储 ccache"
         required: false
         type: boolean
-        default: false
+        default: true
       ksu_branch_mode:
         description: "SukiSU 拉取分支：auto=跟随SUSFS开关自动选 / main=纯管理器分支 / builtin=内核内置实现（仅 SukiSU 生效）"
         required: false
         type: string
         default: "auto"
       manager_commit:
-        description: "提交 hash（合并输入框）：<管理器&内核KSU>,<SUSFS>，逗号或竖线分隔均可，0 = 该段不指定。例：0,def456...(只锁 SUSFS) / abc123...,0(只锁管理器与内核)；留空则不锁定。FinaSU 始终对齐官方 Release"
+        description: "提交锁定（可选）：<管理器&内核KSU>,<SUSFS>；逗号或竖线分隔，0 或留空=不锁。例：abc123,0 或 0,def456"
         required: false
         type: string
         default: ""
